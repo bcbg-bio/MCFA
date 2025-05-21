@@ -13,7 +13,7 @@ from typing import List
 def _EM_step_no_private_stable(
         W: torch.Tensor, Phi: torch.Tensor, Y: torch.Tensor,
         Sigma: torch.Tensor, p: List[int], device = 'cpu', 
-        rcond: float = 1e-08, missing_modes: str = 'raise'):
+        rcond: float = 1e-08, impute_missing: bool = False):
     """One EM step when there is no private structure.
 
     Args:
@@ -30,13 +30,13 @@ def _EM_step_no_private_stable(
     if device == 'gpu': raise NotImplementedError()
     d = W.shape[1]
     N = Y.shape[0]
-    if missing_modes == 'impute_model' and torch.isnan(Y).any():
+    if impute_missing and torch.isnan(Y).any():
         obs_mask = ~torch.isnan(Y)  # observed components
         Y = torch.nan_to_num(Y, 0)
     Q_inv_W = torch.linalg.lstsq(W @ W.T + Phi, W, rcond=rcond).solution
     E_z = Y @ Q_inv_W
     sum_E_zzT = N*torch.eye(d) - N*(W.T @ Q_inv_W) + E_z.T @ E_z
-    if missing_modes == 'impute_model' and torch.isnan(Y).any():
+    if impute_missing and torch.isnan(Y).any():
         E_y = (W @ W.T) @ (torch.linalg.lstsq(W @ W.T + Phi, Y.T, rcond=rcond).solution)
         E_yz = (W - (W @ W.T) @ (torch.linalg.lstsq(W @ W.T + Phi, W, rcond=rcond).solution) + (E_y @ E_z.T)).T
         sum_E_yzT = torch.zeros((W.shape[0], d))
@@ -188,7 +188,7 @@ def _loglik(Sigma: torch.Tensor, Sigma_hat: torch.Tensor, n: int) -> float:
 
 def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
                  rcond = 1e-08, delta = 1e-6, verbose = False, 
-                 missing_modes: str = 'raise', missing_entries: str = 'raise'):
+                 missing_modes: str = 'raise', impute_missing: bool = False):
     """Iteratively fit EM.
 
     Args:
@@ -227,7 +227,7 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
     for it in range(maxit):
         if L is None:
             W_it, Phi_it = _EM_step_no_private_stable(
-                W, Phi, Y, Sigma_hat, p, device, rcond, missing_modes)
+                W, Phi, Y, Sigma_hat, p, device, rcond, impute_missing)
             Sigma_it = W_it @ W_it.T + Phi_it
         else:
             W_it, L_it, Phi_it = _EM_step_full_stable(
