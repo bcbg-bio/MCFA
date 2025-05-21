@@ -12,8 +12,8 @@ from typing import List
 
 def _EM_step_no_private_stable(
         W: torch.Tensor, Phi: torch.Tensor, Y: torch.Tensor,
-        Sigma: torch.Tensor, p: List[int], device = 'cpu',
-        rcond: float = 1e-08):
+        Sigma: torch.Tensor, p: List[int], device = 'cpu', 
+        rcond: float = 1e-08, missing_modes: str = 'raise'):
     """One EM step when there is no private structure.
 
     Args:
@@ -30,12 +30,24 @@ def _EM_step_no_private_stable(
     if device == 'gpu': raise NotImplementedError()
     d = W.shape[1]
     N = Y.shape[0]
+    if missing_modes == 'impute_model' and torch.isnan(Y).any():
+        obs_mask = ~torch.isnan(Y)  # observed components
+        Y = torch.nan_to_num(Y, 0)
     Q_inv_W = torch.linalg.lstsq(W @ W.T + Phi, W, rcond=rcond).solution
     E_z = Y @ Q_inv_W
     sum_E_zzT = N*torch.eye(d) - N*(W.T @ Q_inv_W) + E_z.T @ E_z
-    W_next = torch.linalg.lstsq(sum_E_zzT, (E_z.T @ Y), rcond=rcond).solution.T
+    if missing_modes == 'impute_model' and torch.isnan(Y).any():
+        E_y = (W @ W.T) @ (torch.linalg.lstsq(W @ W.T + Phi, Y.T, rcond=rcond).solution)
+        E_yz = (W - (W @ W.T) @ (torch.linalg.lstsq(W @ W.T + Phi, W, rcond=rcond).solution) + (E_y @ E_z.T)).T
+        sum_E_yzT = torch.zeros((W.shape[0], d))
+        sum_E_yzT += (Y.T @ E_z) * obs_mask.T 
+        sum_E_yzT += E_yz * (~obs_mask.T)
+    else:
+        sum_E_yzT = E_z.T @ Y
+    W_next = torch.linalg.lstsq(sum_E_zzT, (sum_E_yzT), rcond=rcond).solution.T
     # Phi_next = Sigma - (Y.T @ E_z @ W_next.T)/N
-    Phi_next = Sigma - (W_next @ E_z.T @ Y)/N
+    Phi_next = Sigma - (W_next @ sum_E_yzT)/N
+    Phi_next = torch.diagflat(torch.diag(Phi_next))
     psum = np.concatenate([[0], np.cumsum(p, 0)])
     for i_l, i_r in zip(psum[:-1], psum[1:]):
         Phi_next[i_l:i_r, i_r:] = 0
@@ -175,7 +187,8 @@ def _loglik(Sigma: torch.Tensor, Sigma_hat: torch.Tensor, n: int) -> float:
 
 
 def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
-                 rcond = 1e-08, delta = 1e-6, verbose = False):
+                 rcond = 1e-08, delta = 1e-6, verbose = False, 
+                 missing_modes: str = 'raise', missing_entries: str = 'raise'):
     """Iteratively fit EM.
 
     Args:
@@ -189,6 +202,8 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
        rcond: tolerance for leastsquares.
        delta: break when change in likelihood < delta.
        verbose: True to print progress.
+       missing_modes: what to do with unobserved data modes
+       missing_entries: what to do with unobserved data values
     """
     # TODO(brielin): Figure out a way to do this calculation efficiently
     #   without cat/block_diag on W, L, Phi
@@ -212,7 +227,7 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
     for it in range(maxit):
         if L is None:
             W_it, Phi_it = _EM_step_no_private_stable(
-                W, Phi, Y, Sigma_hat, p, device, rcond)
+                W, Phi, Y, Sigma_hat, p, device, rcond, missing_modes)
             Sigma_it = W_it @ W_it.T + Phi_it
         else:
             W_it, L_it, Phi_it = _EM_step_full_stable(
