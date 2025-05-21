@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Iterable, List, Union
 from sklearn import model_selection
 from sklearn import preprocessing
-from . import _em, _pca, _initializers, _cv
+from multicor_fa import _em, _pca, _initializers, _cv
 
 
 # This is required or the pool code below hands on .join().
@@ -400,7 +400,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
 
     if verbose: print('Fitting the model.')
     W, L, Phi, l, cd = _em.fit_EM_iter(
-        Y_all, Sigma_hat, W0, L0, Phi0, maxit, device, rcond, delta, verbose, missing_modes=missing_modes)
+        Y_all, Sigma_hat, W0, L0, Phi0, maxit, device, rcond, delta, verbose, impute_missing = (missing_modes == 'impute_model'))
     rho = _em.calculate_rho(W, L, Phi, Y_all, device, rcond, 'genvar')
     rho, order = torch.sort(rho, descending=True)
 
