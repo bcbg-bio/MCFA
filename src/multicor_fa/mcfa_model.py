@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Iterable, List, Union
 from sklearn import model_selection
 from sklearn import preprocessing
-from multicor_fa import _em, _pca, _initializers, _cv
+from . import _em, _pca, _initializers, _cv
 
 
 # This is required or the pool code below hands on .join().
@@ -252,18 +252,17 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         raise NotImplementedError(
             'missing_modes must be "raise", "drop",'\
             '"skip", "impute_model" or "impute_mean".')
-
-    # Drop rows which are entirely NA to conform to expectations below
-    Y = [Y_m.drop(Y_m.index[pd.isna(Y_m).all(axis=1)]) for Y_m in Y]
     
     ds_names = None
     if isinstance(Y, dict):
         ds_names = Y.keys()
         Y = list(Y.values())
+    # Drop rows which are entirely NA to conform to expectations below
+    Y = [Y_m.drop(Y_m.index[pd.isna(Y_m).all(axis=1)]) for Y_m in Y]
     sample_names = [Y_m.index for Y_m in Y]
     feature_names = [Y_m.columns for Y_m in Y]
 
-    if any(any(pd.isna(Y_m)) for Y_m in Y):
+    if any(Y_m.isna().any().any() for Y_m in Y): # avoid detecting zeros
         if missing_entries == 'raise':
             raise ValueError('Missing entries detected in some datasets')
         elif missing_entries == 'drop':
@@ -280,7 +279,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
 
     common_samples = sample_names[0]
     all_samples = sample_names[0]
-    use_samples = None
+    use_samples = all_samples
     for names in sample_names[1:]:
         common_samples = common_samples.intersection(names)
         all_samples = all_samples.union(names)
@@ -299,18 +298,15 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
             print('Missing modes detected for some samples, Imputing with the mean')
             Y = [pd.concat([Y_m, pd.DataFrame(index=all_samples.difference(Y_m.index),
                                               columns=Y_m.columns)]).fillna(Y_m.mean()) for Y_m in Y]
-            use_samples = all_samples
-        elif missing_entries == 'skip':
-            print('Missing values detected in input, they will be skipped.')
+        elif missing_modes == 'skip':
+            print('Missing modes detected in input, they will be skipped.')
             Y = [pd.concat([Y_m, pd.DataFrame(index=all_samples.difference(Y_m.index),
                                               columns=Y_m.columns)]) for Y_m in Y]
-            use_samples = all_samples
-        elif missing_entries == 'impute_model':
-            print('Missing values detected in input, they will be imputed during'
+        elif missing_modes == 'impute_model':
+            print('Missing modes detected in input, they will be imputed during'
                   'model fitting.')
-            Y = [pd.concat([Y_m, pd.DataFrame(index=all_samples.difference(Y_m.index),
+            Y = [pd.concat([Y_m, pd.DataFrame(index=all_samples.union(Y_m.index),
                                               columns=Y_m.columns)]) for Y_m in Y]
-            use_samples = all_samples
 
     # Rearrange to match index
     Y = [Y_m.loc[use_samples] for Y_m in Y]
@@ -404,7 +400,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
 
     if verbose: print('Fitting the model.')
     W, L, Phi, l, cd = _em.fit_EM_iter(
-        Y_all, Sigma_hat, W0, L0, Phi0, maxit, device, rcond, delta, verbose)
+        Y_all, Sigma_hat, W0, L0, Phi0, maxit, device, rcond, delta, verbose, missing_modes=missing_modes)
     rho = _em.calculate_rho(W, L, Phi, Y_all, device, rcond, 'genvar')
     rho, order = torch.sort(rho, descending=True)
 
