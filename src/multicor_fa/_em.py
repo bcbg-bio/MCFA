@@ -30,7 +30,9 @@ def _EM_step_no_private_stable(
     if device == 'gpu': raise NotImplementedError()
     d = W.shape[1]
     N = Y.shape[0]
-    if impute_modes and torch.isnan(Y).any():
+    if not impute_modes and torch.isnan(Y).any():
+        raise ValueError("Y contains missing values but impute_modes is False")
+    if torch.isnan(Y).any():
         obs_mask = ~torch.isnan(Y)  # observed components
         Y = torch.nan_to_num(Y, 0)
     Q_inv_W = torch.linalg.lstsq(W @ W.T + Phi, W, rcond=rcond).solution
@@ -80,6 +82,8 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
     psum = np.concatenate([[0], np.cumsum(p, 0)])
     ksum = np.concatenate([[0], np.cumsum(k, 0)])
 
+    if not impute_modes and torch.isnan(Y).any():
+        raise ValueError("Y contains missing values but impute_modes is False")
     if torch.isnan(Y).any():
         obs_mask = ~torch.isnan(Y)  # observed components
         Y = torch.nan_to_num(Y, 0)
