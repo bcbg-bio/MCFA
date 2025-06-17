@@ -23,6 +23,7 @@ def _EM_step_no_private_stable(
       Sigma: p_all by p_all torch tensor, Y.T @ Y / N.
       p: List of integers with the dimensionality of each dataset.
       rcond: Condition number for least squares.
+      impute_modes: whether to impute missing data modes
     Returns:
       Tuple W_next, Phi_next with updated parameters.
     """
@@ -30,11 +31,12 @@ def _EM_step_no_private_stable(
     if device == 'gpu': raise NotImplementedError()
     d = W.shape[1]
     N = Y.shape[0]
-    if not impute_modes and torch.isnan(Y).any():
-        raise ValueError("Y contains missing values but impute_modes is False")
     if torch.isnan(Y).any():
-        obs_mask = ~torch.isnan(Y)  # observed components
-        Y = torch.nan_to_num(Y, 0)
+        if not impute_modes:
+            raise ValueError("Y contains missing values but impute_modes is False")
+        else:
+            obs_mask = ~torch.isnan(Y)  # observed components
+            Y = torch.nan_to_num(Y, 0)
     Q_inv_W = torch.linalg.lstsq(W @ W.T + Phi, W, rcond=rcond).solution
     E_z = Y @ Q_inv_W
     sum_E_zzT = N*torch.eye(d) - N*(W.T @ Q_inv_W) + E_z.T @ E_z
@@ -73,6 +75,8 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
       k:
       device: 'cpu' or 'gpu'.
       rcond: Condition number for least squares.
+      impute_modes: whether to impute missing data modes
+      impute_values: whether to impute missing values within a mode
     Returns:
       Tuple W_next, L_next, Phi_next
     """
@@ -82,11 +86,12 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
     psum = np.concatenate([[0], np.cumsum(p, 0)])
     ksum = np.concatenate([[0], np.cumsum(k, 0)])
 
-    if not impute_modes and torch.isnan(Y).any():
-        raise ValueError("Y contains missing values but impute_modes is False")
     if torch.isnan(Y).any():
-        obs_mask = ~torch.isnan(Y)  # observed components
-        Y = torch.nan_to_num(Y, 0)
+        if not impute_modes:
+            raise ValueError("Y contains missing values but impute_modes is False")
+        else:
+            obs_mask = ~torch.isnan(Y)  # observed components
+            Y = torch.nan_to_num(Y, 0)
 
     S21 = torch.cat([W, L], axis=1).to(device)
     S22 = W @ W.T + L @ L.T + Phi
