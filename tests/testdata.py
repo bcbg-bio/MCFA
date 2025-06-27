@@ -35,10 +35,15 @@ def simulate_params(sim_params, private_var = True):
 
     if private_var:
         L = [torch.randn(p[i], k[i]) for i in range(len(p))]
+        Phi = [torch.diag(torch.full((p[i],), sigsq[i])) for i in range(len(p))]
     else:
         L = None
-
-    Phi = [torch.diag(torch.full((p[i],), sigsq[i])) for i in range(len(p))]
+        
+        Phi = [
+            torch.tril(torch.full((p[i],p[i]), sigsq[i])) 
+            for i in range(len(p))
+        ]
+        Phi = [Phi[i] @ Phi[i].T for i in range(len(Phi))]
     
     return W, L, Phi
 
