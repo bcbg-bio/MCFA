@@ -13,7 +13,7 @@ from typing import List
 def _EM_step_no_private_stable(
         W: torch.Tensor, Phi: torch.Tensor, Y: torch.Tensor,
         Sigma: torch.Tensor, p: List[int], device = 'cpu', 
-        rcond: float = 1e-08, impute_modes: bool = False):
+        rcond: float = 1e-08, impute: bool = False):
     """One EM step when there is no private structure.
 
     Args:
@@ -32,8 +32,8 @@ def _EM_step_no_private_stable(
     d = W.shape[1]
     N = Y.shape[0]
     if torch.isnan(Y).any():
-        if not impute_modes:
-            raise ValueError("Y contains missing values but impute_modes is False")
+        if not impute:
+            raise ValueError("Y contains missing values but impute is False")
         else:
             obs_mask = ~torch.isnan(Y)  # observed components
             Y = torch.nan_to_num(Y, 0)
@@ -51,7 +51,6 @@ def _EM_step_no_private_stable(
     W_next = torch.linalg.lstsq(sum_E_zzT, (sum_E_yzT), rcond=rcond).solution.T
     # Phi_next = Sigma - (Y.T @ E_z @ W_next.T)/N
     Phi_next = Sigma - (W_next @ sum_E_yzT)/N
-    Phi_next = torch.diagflat(torch.diag(Phi_next))
     psum = np.concatenate([[0], np.cumsum(p, 0)])
     for i_l, i_r in zip(psum[:-1], psum[1:]):
         Phi_next[i_l:i_r, i_r:] = 0
@@ -62,7 +61,7 @@ def _EM_step_no_private_stable(
 def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
                          Y: torch.tensor, Sigma: torch.Tensor, p, k,
                          device='cpu', rcond: float = 1e-08, 
-                         impute_modes: bool = False, impute_values: bool = False):
+                         impute: bool = False):
     """One EM step for the full model.
 
     Args:
@@ -75,8 +74,7 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
       k:
       device: 'cpu' or 'gpu'.
       rcond: Condition number for least squares.
-      impute_modes: whether to impute missing data modes
-      impute_values: whether to impute missing values within a mode
+      impute: whether to impute missing data
     Returns:
       Tuple W_next, L_next, Phi_next
     """
@@ -87,7 +85,7 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
     ksum = np.concatenate([[0], np.cumsum(k, 0)])
 
     if torch.isnan(Y).any():
-        if not impute_modes:
+        if not impute:
             raise ValueError("Y contains missing values but impute_modes is False")
         else:
             obs_mask = ~torch.isnan(Y)  # observed components
@@ -106,7 +104,7 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
     xx_sum = mom_zx_zxT_sum[d:, d:].to(device)
 
     # this part still needs more extensive testing!
-    if impute_modes and torch.isnan(Y).any():
+    if impute and torch.isnan(Y).any():
         E_y = (W @ W.T) @ (torch.linalg.lstsq(S22, Y, rcond=rcond).solution)
         E_z = E_z_x[:d, :]
         E_x = E_z_x[d:, :]
@@ -225,7 +223,7 @@ def _loglik(Sigma: torch.Tensor, Sigma_hat: torch.Tensor, n: int) -> float:
 
 def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
                  rcond = 1e-08, delta = 1e-6, verbose = False, 
-                 impute_modes: bool = False, impute_values: bool = False):
+                 impute: bool = False):
     """Iteratively fit EM.
 
     Args:
@@ -239,8 +237,7 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
        rcond: tolerance for leastsquares.
        delta: break when change in likelihood < delta.
        verbose: True to print progress.
-       impute_modes: whether to impute missing modes
-       impute_values: whether to impute missing values
+       impute: whether to impute missing data
     """
     # TODO(brielin): Figure out a way to do this calculation efficiently
     #   without cat/block_diag on W, L, Phi
@@ -264,11 +261,11 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
     for it in range(maxit):
         if L is None:
             W_it, Phi_it = _EM_step_no_private_stable(
-                W, Phi, Y, Sigma_hat, p, device, rcond, impute_modes)
+                W, Phi, Y, Sigma_hat, p, device, rcond, impute)
             Sigma_it = W_it @ W_it.T + Phi_it
         else:
             W_it, L_it, Phi_it = _EM_step_full_stable(
-                W, L, Phi, Y, Sigma_hat, p, k, device, rcond, impute_modes, impute_values)
+                W, L, Phi, Y, Sigma_hat, p, k, device, rcond, impute)
             Sigma_it = W_it @ W_it.T + L_it @ L_it.T + Phi_it
         l_it = _loglik(Sigma_it, Sigma_hat, N).tolist()
         cd_it = torch.mean((Sigma_it - Sigma_hat)**2/denom).tolist()

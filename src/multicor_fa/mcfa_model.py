@@ -262,7 +262,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
     sample_names = [Y_m.index for Y_m in Y]
     feature_names = [Y_m.columns for Y_m in Y]
 
-    if any(Y_m.isna().any().any() for Y_m in Y): # avoid detecting zeros
+    if any(any(pd.isna(Y_m)) for Y_m in Y):
         if missing_entries == 'raise':
             raise ValueError('Missing entries detected in some datasets')
         elif missing_entries == 'drop':
@@ -279,7 +279,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
 
     common_samples = sample_names[0]
     all_samples = sample_names[0]
-    use_samples = all_samples
+    use_samples = None
     for names in sample_names[1:]:
         common_samples = common_samples.intersection(names)
         all_samples = all_samples.union(names)
@@ -305,7 +305,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         elif missing_modes == 'impute_model':
             print('Missing modes detected in input, they will be imputed during'
                   'model fitting.')
-            Y = [pd.concat([Y_m, pd.DataFrame(index=all_samples.union(Y_m.index),
+            Y = [pd.concat([Y_m, pd.DataFrame(index=all_samples.difference(Y_m.index),
                                               columns=Y_m.columns)]) for Y_m in Y]
 
     # Rearrange to match index
@@ -400,7 +400,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
 
     if verbose: print('Fitting the model.')
     W, L, Phi, l, cd = _em.fit_EM_iter(
-        Y_all, Sigma_hat, W0, L0, Phi0, maxit, device, rcond, delta, verbose, impute_missing = (missing_modes == 'impute_model'))
+        Y_all, Sigma_hat, W0, L0, Phi0, maxit, device, rcond, delta, verbose, impute = (missing_modes == 'impute_model'))
     rho = _em.calculate_rho(W, L, Phi, Y_all, device, rcond, 'genvar')
     rho, order = torch.sort(rho, descending=True)
 
