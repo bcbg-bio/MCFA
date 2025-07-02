@@ -35,32 +35,38 @@ def simulate_params(sim_params, private_var = True):
 
     if private_var:
         L = [torch.randn(p[i], k[i]) for i in range(len(p))]
+        A = None
         Phi = [torch.diag(torch.full((p[i],), sigsq[i])) for i in range(len(p))]
     else:
         L = None
-        
-        Phi = [
-            torch.tril(torch.full((p[i],p[i]), sigsq[i])) 
+        A = [
+            (torch.randn(p[i], p[i]) / torch.sqrt(torch.tensor(p[i], dtype=torch.float32)))
             for i in range(len(p))
         ]
-        Phi = [Phi[i] @ Phi[i].T for i in range(len(Phi))]
+        Phi = [A[i] @ A[i].T for i in range(len(A))]
     
-    return W, L, Phi
+    return W, L, Phi, A
 
 
-def simulate_noise(sim_params, Phi):
+def simulate_noise(sim_params, Phi, A, private_var):
     '''
     Sample noise E from previously generated variance
     '''
     p = sim_params['p']
     n = sim_params['n']
 
-    E = [
-        torch.matmul(
-            torch.linalg.cholesky(Phi[i]), 
-            torch.randn(p[i], n)
-        ) for i in range(len(p))
-    ]
+    if private_var:
+        E = [
+            torch.matmul(
+                torch.linalg.cholesky(Phi[i]), 
+                torch.randn(p[i], n)
+            ) for i in range(len(p))
+        ]
+    else:
+        E = [
+            torch.matmul(A[i], torch.randn(p[i], n)) 
+            for i in range(len(p))
+        ]
     return E
 
 
@@ -70,8 +76,8 @@ def simulate_data(sim_params, private_var = True, verbose = False):
     the formula Y = WZ + LX + E (or Y = WZ + E if no private factors)
     '''
     Z, X = simulate_factors(sim_params, private_var)
-    W, L, Phi = simulate_params(sim_params, private_var)
-    E = simulate_noise(sim_params, Phi)
+    W, L, Phi, A = simulate_params(sim_params, private_var)
+    E = simulate_noise(sim_params, Phi, A, private_var)
 
     if private_var:
         if verbose:
