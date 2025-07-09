@@ -59,9 +59,9 @@ def score(data, Z, transform = True):
     Args:
       data: A pandas DataFrame with features as columns. The original data.
       Z: The factor set used to calculate gene statistics. Usually mcfa_res.Z.
-      transform: bool. True to transform correlations to Z-scores.
+      transform: Bool. True to transform correlations to Z-scores.
     Returns:
-      A pd.DataFrame with rows as data features and columns as factors, entires
+      A pd.DataFrame with rows as data features and columns as factors, entries
       are (optionally Z-transformed) correlations.
     """
     n = Z.shape[0]
@@ -215,7 +215,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         rcond: Float, zero tolerance for least squares routines.
         verbose: Bool. True to print progress.
     Returns:
-        an MCFARes instance.
+        An MCFARes instance.
     Raises:
         NotImplementedError: if a TODO feature is called.
         ValueError: if the input data matrices have a different number
@@ -296,17 +296,19 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
             use_samples = common_samples
         elif missing_modes == 'impute_mean':
             print('Missing modes detected for some samples, Imputing with the mean')
-            Y = [pd.concat([Y_m, pd.DataFrame(index=all_samples.difference(Y_m.index),
-                                              columns=Y_m.columns)]).fillna(Y_m.mean()) for Y_m in Y]
+            Y = [pd.concat([Y_m, pd.DataFrame(
+                    index=all_samples.difference(Y_m.index),
+                    columns=Y_m.columns
+                )]).fillna(Y_m.mean()) for Y_m in Y]
         elif missing_modes == 'skip':
-            print('Missing modes detected in input, they will be skipped.')
-            Y = [pd.concat([Y_m, pd.DataFrame(index=all_samples.difference(Y_m.index),
-                                              columns=Y_m.columns)]) for Y_m in Y]
+            raise NotImplementedError
         elif missing_modes == 'impute_model':
             print('Missing modes detected in input, they will be imputed during'
                   'model fitting.')
-            Y = [pd.concat([Y_m, pd.DataFrame(index=all_samples.difference(Y_m.index),
-                                              columns=Y_m.columns)]) for Y_m in Y]
+            Y = [pd.concat([Y_m, pd.DataFrame(
+                    index=all_samples.difference(Y_m.index),
+                    columns=Y_m.columns
+                )]) for Y_m in Y]
 
     # Rearrange to match index
     Y = [Y_m.loc[use_samples] for Y_m in Y]
@@ -400,7 +402,9 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
 
     if verbose: print('Fitting the model.')
     W, L, Phi, l, cd = _em.fit_EM_iter(
-        Y_all, Sigma_hat, W0, L0, Phi0, maxit, device, rcond, delta, verbose, impute = (missing_modes == 'impute_model'))
+        Y_all, Sigma_hat, W0, L0, Phi0, maxit, device, rcond, delta, verbose, 
+        impute = (missing_modes == 'impute_model')
+    )
     rho = _em.calculate_rho(W, L, Phi, Y_all, device, rcond, 'genvar')
     rho, order = torch.sort(rho, descending=True)
 

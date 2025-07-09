@@ -23,7 +23,7 @@ def _EM_step_no_private_stable(
       Sigma: p_all by p_all torch tensor, Y.T @ Y / N.
       p: List of integers with the dimensionality of each dataset.
       rcond: Condition number for least squares.
-      impute_modes: whether to impute missing data modes
+      impute_modes: Whether to impute missing data modes. 
     Returns:
       Tuple W_next, Phi_next with updated parameters.
     """
@@ -48,7 +48,7 @@ def _EM_step_no_private_stable(
         sum_E_yzT += E_yz * (~obs_mask.T)
     else:
         sum_E_yzT = E_z.T @ Y
-    W_next = torch.linalg.lstsq(sum_E_zzT, (sum_E_yzT), rcond=rcond).solution.T
+    W_next = torch.linalg.lstsq(sum_E_zzT, sum_E_yzT, rcond=rcond).solution.T
     # Phi_next = Sigma - (Y.T @ E_z @ W_next.T)/N
     Phi_next = Sigma - (W_next @ sum_E_yzT)/N
     psum = np.concatenate([[0], np.cumsum(p, 0)])
@@ -70,11 +70,11 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
       Phi: p_all by p_all tensor. Current estimate of Phi.
       Y: N by p_all torch tensor, the data.
       Sigma: p_all by p_all torch tensor, Y.T @ Y / N.
-      p:
-      k:
+      p: List of integers with the dimensionality of each dataset.
+      k: List of integers with the private dimensionality of each dataset.
       device: 'cpu' or 'gpu'.
       rcond: Condition number for least squares.
-      impute: whether to impute missing data
+      impute: Whether to impute missing data. 
     Returns:
       Tuple W_next, L_next, Phi_next
     """
@@ -103,26 +103,25 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
     zx_sum = mom_zx_zxT_sum[:d, d:].to(device)
     xx_sum = mom_zx_zxT_sum[d:, d:].to(device)
 
-    # this part still needs more extensive testing!
     if impute and torch.isnan(Y).any():
         E_y = (W @ W.T) @ (torch.linalg.lstsq(S22, Y, rcond=rcond).solution)
         E_z = E_z_x[:d, :]
         E_x = E_z_x[d:, :]
-        E_yz = (W - (W @ W.T) @ S22inv_S21[:, :d] + (E_y @ E_z.T)).T
-        E_yx = (L - (W @ W.T) @ S22inv_S21[:, d:] + (E_y @ E_x.T)).T
-        E_yy = S22 - (W @ W.T) @ (torch.linalg.lstsq(S22, (W @ W.T), rcond=rcond).solution) + (E_y @ E_y.T)
+        E_yzT = (W - (W @ W.T) @ S22inv_S21[:, :d] + (E_y @ E_z.T)).T
+        E_yxT = (L - (W @ W.T) @ S22inv_S21[:, d:] + (E_y @ E_x.T)).T
+        E_yyT = S22 - (W @ W.T) @ (torch.linalg.lstsq(S22, (W @ W.T), rcond=rcond).solution) + (E_y @ E_y.T)
 
         sum_E_yzT = torch.zeros((W.shape[0], d))
         sum_E_yzT += (Y.T @ E_z_x[:d, :].T) * obs_mask.T
-        sum_E_yzT += E_yz * (~obs_mask.T)
+        sum_E_yzT += E_yzT * (~obs_mask.T)
 
         sum_E_yxT = torch.zeros((L.shape[0], d))
         sum_E_yxT += (Y.T @ E_z_x[d:, :].T) * obs_mask.T
-        sum_E_yxT += E_yx * (~obs_mask.T)
+        sum_E_yxT += E_yxT * (~obs_mask.T)
 
         sum_E_yyT = torch.zeros(Y.shape)
         sum_E_yyT += Sigma * N * obs_mask.T
-        sum_E_yyT += E_yy * (~obs_mask.T)
+        sum_E_yyT += E_yyT * (~obs_mask.T)
     else:
         sum_E_yzT = Y.T @ E_z_x[:d, :].T
         sum_E_yxT = Y.T @ E_z_x[d:, :].T
@@ -188,9 +187,9 @@ def get_latent(W: List[torch.tensor], L: List[torch.tensor],
     """Gets latent Z, X for the model (the E-step).
 
      Args:
-       W:
-       L:
-       Phi:
+       W: p_all=sum(p) by d tensor. Current estimate of W.
+       L: p_all by k_all=sum(k) block diagonal tensor. Current estimate of L.
+       Phi: p_all by p_all tensor. Current estimate of Phi.
        Y: N by p_all torch tensor, the data.
        device: 'cpu' or 'gpu'.
        rcond: Condition number for least squares.
@@ -230,14 +229,14 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
        Y: N by p_all torch tensor, the data.
        Sigma_hat: Y.T @ Y / N
        p: List of int, dimensions of individual datasets.
-       W:
-       L:
-       Phi:
-       maxit: maximum number of iterations to run.
-       rcond: tolerance for leastsquares.
-       delta: break when change in likelihood < delta.
+       W: p_all=sum(p) by d tensor. Current estimate of W.
+       L: p_all by k_all=sum(k) block diagonal tensor. Current estimate of L.
+       Phi: p_all by p_all tensor. Current estimate of Phi.
+       maxit: Maximum number of iterations to run.
+       rcond: Tolerance for leastsquares.
+       delta: Break when change in likelihood < delta.
        verbose: True to print progress.
-       impute: whether to impute missing data
+       impute: Whether to impute missing data. 
     """
     # TODO(brielin): Figure out a way to do this calculation efficiently
     #   without cat/block_diag on W, L, Phi
