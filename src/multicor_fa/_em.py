@@ -12,7 +12,7 @@ from typing import List
 
 def _EM_step_no_private_stable(
         W: torch.Tensor, Phi: torch.Tensor, Y: torch.Tensor,
-        Sigma: torch.Tensor, p: List[int], device = 'cpu', 
+        Sigma: torch.Tensor, p: List[int], device = 'cpu',
         rcond: float = 1e-08, impute: bool = False):
     """One EM step when there is no private structure.
 
@@ -41,10 +41,11 @@ def _EM_step_no_private_stable(
     E_z = Y @ Q_inv_W
     sum_E_zzT = N*torch.eye(d) - N*(W.T @ Q_inv_W) + E_z.T @ E_z
     if torch.isnan(Y).any():
-        E_y = (W @ W.T) @ (torch.linalg.lstsq(W @ W.T + Phi, Y.T, rcond=rcond).solution)
+        E_y = (W @ W.T) @ \
+              (torch.linalg.lstsq(W @ W.T + Phi, Y.T, rcond=rcond).solution)
         E_yz = (W - (W @ W.T) @ (Q_inv_W) + (E_y @ E_z.T)).T
         sum_E_yzT = torch.zeros((W.shape[0], d))
-        sum_E_yzT += (Y.T @ E_z) * obs_mask.T 
+        sum_E_yzT += (Y.T @ E_z) * obs_mask.T
         sum_E_yzT += E_yz * (~obs_mask.T)
     else:
         sum_E_yzT = E_z.T @ Y
@@ -60,7 +61,7 @@ def _EM_step_no_private_stable(
 
 def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
                          Y: torch.tensor, Sigma: torch.Tensor, p, k,
-                         device='cpu', rcond: float = 1e-08, 
+                         device='cpu', rcond: float = 1e-08,
                          impute: bool = False):
     """One EM step for the full model.
 
@@ -109,7 +110,9 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
         E_x = E_z_x[d:, :]
         E_yzT = (W - (W @ W.T) @ S22inv_S21[:, :d] + (E_y @ E_z.T)).T
         E_yxT = (L - (W @ W.T) @ S22inv_S21[:, d:] + (E_y @ E_x.T)).T
-        E_yyT = S22 - (W @ W.T) @ (torch.linalg.lstsq(S22, (W @ W.T), rcond=rcond).solution) + (E_y @ E_y.T)
+        E_yyT = S22 - (W @ W.T) @ \
+                (torch.linalg.lstsq(S22, (W @ W.T), rcond=rcond).solution) + \
+                (E_y @ E_y.T)
 
         sum_E_yzT = torch.zeros((W.shape[0], d))
         sum_E_yzT += (Y.T @ E_z_x[:d, :].T) * obs_mask.T
@@ -127,8 +130,10 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
         sum_E_yxT = Y.T @ E_z_x[d:, :].T
         sum_E_yyT = Sigma * N
 
-    W_next = torch.linalg.lstsq(zz_sum, (sum_E_yzT - L @ zx_sum.T).T, rcond=rcond).solution.T
-    L_next = torch.linalg.lstsq(xx_sum, (sum_E_yxT - W @ zx_sum).T, rcond=rcond).solution.T
+    W_next = torch.linalg.lstsq(zz_sum, (sum_E_yzT - L @ zx_sum.T).T,
+                                rcond=rcond).solution.T
+    L_next = torch.linalg.lstsq(xx_sum, (sum_E_yxT - W @ zx_sum).T,
+                                rcond=rcond).solution.T
     L_next = [L_next[i:j, l:m]
               for i, j, l, m in zip(psum[:-1], psum[1:], ksum[:-1], ksum[1:])]
     L_next = torch.block_diag(*L_next)
@@ -221,7 +226,7 @@ def _loglik(Sigma: torch.Tensor, Sigma_hat: torch.Tensor, n: int) -> float:
 
 
 def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
-                 rcond = 1e-08, delta = 1e-6, verbose = False, 
+                 rcond = 1e-08, delta = 1e-6, verbose = False,
                  impute: bool = False):
     """Iteratively fit EM.
 
@@ -275,7 +280,8 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
         W = W_it
         L = L_it
         Phi = Phi_it
-        if verbose: print('Iter:', it+1, 'Likelihood:', l_it, 'Percent change:', l_delta_it, 'Time (s):', time.time()-t0)
+        if verbose: print('Iter:', it+1, 'Likelihood:', l_it,
+                    'Percent change:', l_delta_it, 'Time (s):', time.time()-t0)
         if delta is not None:
             if l_delta_it < delta: break
     W = [W[i:j, :] for i, j in zip(psum[:-1], psum[1:])]

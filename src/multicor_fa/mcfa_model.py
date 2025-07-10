@@ -75,7 +75,7 @@ def score(data, Z, transform = True):
 
 
 def cv(Y: Iterable[pd.DataFrame], mcfa_res: MCFARes,
-       folds: Union[str, int] = 10, threads: [int] = 1,
+       folds: Union[str, int] = 10, threads: int = 1,
        verbose: bool = False):
     """Checks for over-fitting using k-fold cross validation.
 
@@ -252,7 +252,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         raise NotImplementedError(
             'missing_modes must be "raise", "drop",'\
             '"skip", "impute_model" or "impute_mean".')
-    
+
     ds_names = None
     if isinstance(Y, dict):
         ds_names = Y.keys()
