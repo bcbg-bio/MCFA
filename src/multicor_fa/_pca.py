@@ -117,7 +117,7 @@ def pca(X: pd.DataFrame, k: int = 'infer', center: bool = True,
     if len(drop_index) > 0:
         X.drop(X.index[drop_index], inplace=True)
 
-    if (missing == 'raise') & any(pd.isna(X)):
+    if (missing == 'raise') & pd.isna(X).any(axis = None):
         raise ValueError('Missing data not expected in PCA input.')
 
     if center | scale:
@@ -127,7 +127,7 @@ def pca(X: pd.DataFrame, k: int = 'infer', center: bool = True,
         X = torch.from_numpy(X.values)
 
     pcares = None
-    if missing == 'ignore':
+    if missing == 'raise' or missing == 'ignore':
         U, V, S_k, var_exp, k, N, D, mp_dim = _pca(X, k, calc_V)
     elif missing == 'impute':
         U, V, S_k, var_exp, k, N, D, mp_dim = _ppca_missing(X, k)

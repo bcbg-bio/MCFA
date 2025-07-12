@@ -5,6 +5,9 @@ Do not call directly, see mcfa.py for usage.
 """
 
 import torch
+import numpy as np
+import pandas as pd
+from multicor_fa import _pca
 from typing import List
 
 def _ppca(X, d):
@@ -89,7 +92,7 @@ def _rho_mp_sim(N: int, p: List[int], nsims=100, device='cpu'):
     sim_res = []
     for _ in range(nsims):
         Y = [pd.DataFrame(np.random.normal(size=(N, p_m))) for p_m in p]
-        Y_pcs = [pca(Y_m, 'all') for Y_m in Y]
+        Y_pcs = [_pca.pca(Y_m, 'all') for Y_m in Y]
         U_all = torch.cat([pc.U for pc in Y_pcs], dim = 1)
         UTU = U_all.T @ U_all
         rho = torch.linalg.eigvalsh(UTU)
