@@ -262,7 +262,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
     sample_names = [Y_m.index for Y_m in Y]
     feature_names = [Y_m.columns for Y_m in Y]
 
-    if any(any(pd.isna(Y_m)) for Y_m in Y):
+    if any(Y_m.isna().any(axis = None) for Y_m in Y):
         if missing_entries == 'raise':
             raise ValueError('Missing entries detected in some datasets')
         elif missing_entries == 'drop':
