@@ -300,6 +300,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
                     index=all_samples.difference(Y_m.index),
                     columns=Y_m.columns
                 )]).fillna(Y_m.mean()) for Y_m in Y]
+            use_samples = all_samples
         elif missing_modes == 'skip':
             raise NotImplementedError
         elif missing_modes == 'impute_model':
@@ -309,6 +310,9 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
                     index=all_samples.difference(Y_m.index),
                     columns=Y_m.columns
                 )]) for Y_m in Y]
+            use_samples = all_samples
+    else:
+        use_samples = all_samples
 
     # Rearrange to match index
     Y = [Y_m.loc[use_samples] for Y_m in Y]
@@ -359,7 +363,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
             Y_all = torch.cat([torch.from_numpy(Y_m.values) for Y_m in Y],
                               axis=1)
     if verbose: print('Calculating empirical covariance.')
-    mask = ~torch.isnan(Y_all)
+    mask = ~torch.isnan(Y_all).any(dim = 1, keepdim = True)
     N = mask.type(torch.int64).T @ mask.type(torch.int64)
     Sigma_hat = Y_all.nan_to_num().T @ Y_all.nan_to_num() / N
     psum = np.concatenate([[0], np.cumsum(p, 0)])
@@ -368,12 +372,12 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
     # TODO(brielin): This is doing a little extra work/memory if d == 'infer'
     #   and init = 'avgvar' (the default). Also note that _init_ methods may
     #   no longer need to return rho and ppca may no longer need to return vals.
-    if verbose: print('Initialzing model.')
+    if verbose: print('Initializing model.')
     if d == 'all':
         d = p_all
     elif d == 'infer':
         if verbose: print('Inferring the shared dimensionality.')
-        rho_min, _ = _rho_mp_sim(N, p)
+        rho_min, _ = _initializers._rho_mp_sim(N, p)
         U_all = torch.cat([pc.U for pc in Y_pcs], dim = 1)
         UTU = U_all.T @ U_all
         rho0 = torch.linalg.eigvalsh(UTU)
@@ -385,20 +389,20 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
     if init == 'random':
         W0 = [torch.randn((p_m, d)).double() for p_m in p]
     elif init == 'avgnorm':
-        W0, _ = _init_norm_W(Sigma_hat, psum, d, M)
+        W0, _ = _initializers._init_norm_W(Sigma_hat, psum, d, M)
     elif init == 'avgvar':
-        W0, _  = _init_var_W(Y_pcs, psum, d, informative)
+        W0, _  = _initializers._init_var_W(Y_pcs, psum, d, informative)
 
-    # TODO(brielin): Edge case of some mp_dim < d
+    # TODO(brielin): Edge case of some k < d
     if k == 'infer':
-        k = [pca_m.mp_dim - d for pca_m in Y_pcs]
+        k = [max(pca_m.k - d, 0) for pca_m in Y_pcs]
 
     if init == 'random':
         L0 = None if k is None else [
             torch.randn((p_m, k_m)).double() for k_m, p_m in zip(k, p)]
         Phi0 = [torch.eye(p_m) for p_m in p]
     else:
-        L0, Phi0 = _init_L_Phi(Sigma_hat, W0, psum, p, k)
+        L0, Phi0 = _initializers._init_L_Phi(Sigma_hat, W0, psum, p, k)
 
     if verbose: print('Fitting the model.')
     W, L, Phi, l, cd = _em.fit_EM_iter(
