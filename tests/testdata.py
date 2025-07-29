@@ -1,19 +1,51 @@
-"""
-Simulate (random) data to test MCFA model
+# pylint: disable=invalid-name
+"""Testing functions for MCFA EM step. 
+
+Simulates (random) data from given parameters to test MCFA model. 
 """
 from typing import Dict, List, Union
+import math
+import random
 import torch
 
 type Params = Dict[str, Union[List[int], int]]
 
+def simulate_data_params(m: int = 3, n: int = 5000, private_var: bool = True):
+    """Randomly generates dataset parameters for testing purposes.
+    
+    Args:
+      m: Integer. Number of datasets to simulate. 
+      n: Integer. Total number of samples. 
+      private_var: Bool. Whether or not each dataset has private structure.
+    Returns: 
+      A random dictionary of parameters d, k, n, p, and sigsq.
+        - d: Integer. Shared dimensionality across datasets.
+        - k: m-length list of integers. Private dimensionalities (k_m) for each 
+             dataset. If no private structure, k is 0 for all datasets. 
+        - n: Integer. Total number of samples, as given in input. 
+        - p: m-length list of integers. Full dimensionalities (p_m) for each 
+             dataset. 
+        - sigsq: List of integers. Private variances for each dataset. 
+    """
+    d = random.randint(10, 15)
+    p = [random.randint(20, 30) for _ in range(m)]
+    if private_var:
+        k = [p[i] - d for i in range(m)]
+    else:
+        k = [0]*m
+    sigsq = [random.uniform(0.1, 0.9) for _ in range(m)]
+    return {'d': d, 'k': k, 'n': n, 'p': p, 'sigsq': sigsq}
+
+
 def simulate_factors(sim_params: Params, private_var: bool = True):
     """Samples Z and X from a standard normal distribution.
+
     Args: 
       sim_params: A dictionary of parameters d, k, n, p, and sigsq
         - d: Integer. Shared dimensionality across datasets.
         - k: List of integers. Private dimensionalities (k_m) for each dataset.
         - n: Integer. Total number of samples. 
-        - p: List of integers. Full dimensionalities (p_m) for each datset. 
+        - p: List of integers. Full dimensionalities (p_m) for each dataset. 
         - sigsq: List of integers. Private variances for each dataset. 
       private_var: Bool. Whether or not each dataset has private structure. If 
         private_var=False, k will be ignored. 
@@ -41,12 +73,13 @@ def simulate_factors(sim_params: Params, private_var: bool = True):
 
 def simulate_params(sim_params: Params, private_var: bool = True):
     """Randomly generates loadings W and L and specific variance Phi.
+
     Args: 
       sim_params: A dictionary of parameters d, k, n, p, and sigsq
         - d: Integer. Shared dimensionality across datasets.
         - k: List of integers. Private dimensionalities (k_m) for each dataset.
         - n: Integer. Total number of samples. 
-        - p: List of integers. Full dimensionalities (p_m) for each datset. 
+        - p: List of integers. Full dimensionalities (p_m) for each dataset. 
         - sigsq: List of integers. Private variances for each dataset. 
       private_var: Bool. Whether or not each dataset has private structure. If 
         private_var=False, k and sigsq will be ignored. 
@@ -71,33 +104,31 @@ def simulate_params(sim_params: Params, private_var: bool = True):
     p = sim_params['p']
     sigsq = sim_params['sigsq']
 
-    W = [torch.randn(p[i], d) for i in range(len(p))]
+    W = [torch.randn(p[i], d) / math.sqrt(d) for i in range(len(p))]
 
     if private_var:
-        L = [torch.randn(p[i], k[i]) for i in range(len(p))]
+        L = [torch.randn(p[i], k[i]) / math.sqrt(k[i]) for i in range(len(p))]
         A = None
         Phi = [torch.diag(torch.full((p[i],), sigsq[i])) for i in range(len(p))]
     else:
         L = None
-        A = [
-            (torch.randn(p[i], p[i]) / torch.sqrt(torch.tensor(p[i], dtype=torch.float32)))
-            for i in range(len(p))
-        ]
+        A = [(torch.randn(p[i], p[i]) / math.sqrt(p[i])) for i in range(len(p))]
         Phi = [A[i] @ A[i].T for i in range(len(A))]
 
     return W, L, Phi, A
 
 
-def simulate_noise(sim_params : Params, Phi : List[torch.tensor], 
-                   A : Union[List[torch.tensor], None], 
+def simulate_noise(sim_params : Params, Phi : List[torch.tensor],
+                   A : Union[List[torch.tensor], None],
                    private_var : bool = True):
     """Samples noise E from previously generated variance Phi. 
+
     Args: 
       sim_params: A dictionary of parameters d, k, n, p, and sigsq
         - d: Integer. Shared dimensionality across datasets.
         - k: List of integers. Private dimensionalities (k_m) for each dataset.
         - n: Integer. Total number of samples. 
-        - p: List of integers. Full dimensionalities (p_m) for each datset. 
+        - p: List of integers. Full dimensionalities (p_m) for each dataset. 
         - sigsq: List of integers. Private variances for each dataset. 
       Phi: List of p_m (features) by p_m (features) tensors. Covariance 
         matrices for each dataset. 
@@ -112,10 +143,8 @@ def simulate_noise(sim_params : Params, Phi : List[torch.tensor],
 
     if private_var:
         E = [
-            torch.matmul(
-                torch.linalg.cholesky(Phi[i]), 
-                torch.randn(p[i], n)
-            ) for i in range(len(p))
+            (torch.randn(n, p[i]) * torch.sqrt(torch.diag(Phi[i]))).T
+            for i in range(len(p))
         ]
     else:
         E = [
@@ -126,14 +155,15 @@ def simulate_noise(sim_params : Params, Phi : List[torch.tensor],
 
 
 def simulate_data(sim_params : Params, private_var : bool = True):
-    """Simulate parameters, latent variables, and noise to generate Y according 
-    to the formula Y = WZ + LX + E (or Y = WZ + E if no private structure)
+    """Simulates parameters, latent variables, and noise to generate Y 
+    according to the formula Y=WZ+LX+E (or Y=WZ+E if no private structure)
+
     Args: 
       sim_params: A dictionary of parameters d, k, n, p, and sigsq
         - d: Integer. Shared dimensionality across datasets.
         - k: List of integers. Private dimensionalities (k_m) for each dataset.
         - n: Integer. Total number of samples. 
-        - p: List of integers. Full dimensionalities (p_m) for each datset. 
+        - p: List of integers. Full dimensionalities (p_m) for each dataset. 
         - sigsq: List of integers. Private variances for each dataset. 
       private_var: Bool. Whether or not each dataset has private structure. 
     Returns: 
@@ -147,40 +177,52 @@ def simulate_data(sim_params : Params, private_var : bool = True):
         - Phi: List of p_m (features) by p_m (features) tensors. Covariance 
              matrices for each dataset.
     Raises: 
-      ValueError: If the number of datasets or dimensions are inconsistent
-        across parameters, or if any values in sigsq are negative. 
+      ValueError: If the number of datasets, dimensions, or parameters are 
+        inconsistent, or if any values in sigsq are negative.
     """
+    if not all(par in sim_params.keys() for par in ['d','k','n','p','sigsq']):
+        raise ValueError('Parameters must include all of d, k, n, p, sigsq.')
+
     if len(sim_params['k']) != len(sim_params['p']) \
        or len(sim_params['k']) != len(sim_params['sigsq']):
-        raise ValueError("Params k, p, and sigsq must all be the same length.")
-    if any([
-        sim_params['p'][i] < sim_params['k'][i] + sim_params['d']
+        raise ValueError('Params k, p, and sigsq must all be the same length.')
+
+    if any(sim_params['p'][i] < sim_params['k'][i] + sim_params['d']
         for i in range(len(sim_params['k']))
-    ]): 
-        raise ValueError("Number of features p_m for a dataset must equal at least k_m + d.")
-    if any([sigsq < 0 for sigsq in sim_params['sigsq']]):
-        raise ValueError("Variance values in sigsq must be positive.")
+    ):
+        raise ValueError('Number of features p_m for a dataset must equal at'
+                         'least k_m + d.')
+
+    if any(sigsq < 0 for sigsq in sim_params['sigsq']):
+        raise ValueError('Variance values in sigsq must be positive.')
+
+    if all(sim_params['k'][i]<1 for i in range(len(sim_params['k']))) \
+      and private_var:
+        print('No private factors detected for any dataset; assuming no'
+              'private structure')
+        private_var = False
 
     Z, X = simulate_factors(sim_params, private_var)
     W, L, Phi, A = simulate_params(sim_params, private_var)
     E = simulate_noise(sim_params, Phi, A, private_var)
 
     if private_var:
-        print("Y = WZ + LX + E")
-        Y = [torch.matmul(W[i], Z) + torch.matmul(L[i], X[i]) + E[i] for i in range(len(W))]
+        Y = [torch.matmul(W[i], Z)
+             + torch.matmul(L[i], X[i])
+             + E[i] for i in range(len(W))]
     else:
-        print("No private structure, so Y = WZ + E")
-        Y = [torch.matmul(W[i], Z) + E[i] for i in range(len(W))]
+        Y = [torch.matmul(W[i], Z)
+             + E[i] for i in range(len(W))]
 
-    # generate stacked Y data for input to EM step, if needed
+    # Generate stacked Y data for input to EM step
     Y_stack = torch.cat(Y, dim=0)
     return Y_stack, W, L, Phi
 
 
-def initialize_params(W : List[torch.tensor], L : List[torch.tensor], 
+def initialize_params(W : List[torch.tensor], L : List[torch.tensor],
                       Phi : List[torch.tensor], private_var : bool = True):
-    """
-    Randomly initializes W, L, and Phi. 
+    """Randomly initializes W, L, and Phi. 
+    
     Args: 
       - W: List of p_m (features) by d (shared dimensions) tensors. Shared 
            factor loadings for each dataset. 
