@@ -114,7 +114,7 @@ def cv(Y: Iterable[pd.DataFrame], mcfa_res: MCFARes,
         #     pool.join()
     else:
         for indices in enumerate(cv_iter.split(mcfa_res.Z)):
-            results.append(_cv_one_iter(
+            results.append(_cv.cv_one_iter(
                 indices, Y, mcfa_res.Z, mcfa_res.X, mcfa_res.n_pcs,
                 mcfa_res.d, mcfa_res.k, mcfa_res.center,
                 mcfa_res.scale, mcfa_res.init, mcfa_res.maxit, mcfa_res.delta,
@@ -212,6 +212,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
           to run none and return only the initial solution.
         delta: Float, convergance tolerance for EM. Set to None to run for
           maxit iterations.
+        device: 'cpu' or 'gpu'. How to run the MCFA model. 
         rcond: Float, zero tolerance for least squares routines.
         verbose: Bool. True to print progress.
     Returns:
@@ -377,7 +378,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         d = p_all
     elif d == 'infer':
         if verbose: print('Inferring the shared dimensionality.')
-        rho_min, _ = _initializers._rho_mp_sim(N, p)
+        rho_min, _ = _initializers.rho_mp_sim(N, p)
         U_all = torch.cat([pc.U for pc in Y_pcs], dim = 1)
         UTU = U_all.T @ U_all
         rho0 = torch.linalg.eigvalsh(UTU)
@@ -389,9 +390,9 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
     if init == 'random':
         W0 = [torch.randn((p_m, d)).double() for p_m in p]
     elif init == 'avgnorm':
-        W0, _ = _initializers._init_norm_W(Sigma_hat, psum, d, M)
+        W0, _ = _initializers.init_norm_W(Sigma_hat, psum, d, M)
     elif init == 'avgvar':
-        W0, _  = _initializers._init_var_W(Y_pcs, psum, d, informative)
+        W0, _  = _initializers.init_var_W(Y_pcs, psum, d, informative)
 
     # TODO(brielin): Edge case of some k < d
     if k == 'infer':
@@ -402,7 +403,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
             torch.randn((p_m, k_m)).double() for k_m, p_m in zip(k, p)]
         Phi0 = [torch.eye(p_m) for p_m in p]
     else:
-        L0, Phi0 = _initializers._init_L_Phi(Sigma_hat, W0, psum, p, k)
+        L0, Phi0 = _initializers.init_L_Phi(Sigma_hat, W0, psum, p, k)
 
     if verbose: print('Fitting the model.')
     W, L, Phi, l, cd = _em.fit_EM_iter(

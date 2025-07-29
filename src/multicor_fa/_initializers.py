@@ -1,7 +1,7 @@
 # pylint: disable=invalid-name
 """Initializers for MCFA model.
 
-Do not call directly, see mcfa.py for usage.
+Do not call directly, see mcfa_model.py for usage.
 """
 
 import torch
@@ -26,7 +26,7 @@ def _ppca(X, d):
 
 
 # TODO(brielin): Double check that
-def _init_var_W(Y_pcs, psum, d, informative):
+def init_var_W(Y_pcs, psum, d, informative):
     """Initializes W using sumcor with avgvar constraint.
 
     Args:
@@ -45,7 +45,7 @@ def _init_var_W(Y_pcs, psum, d, informative):
     return W, vals
 
 
-def _init_norm_W(Sigma_hat, psum, d, M):
+def init_norm_W(Sigma_hat, psum, d, M):
     """Initializes W using sumcor with avgnorm constraint.
 
     Args:
@@ -59,7 +59,7 @@ def _init_norm_W(Sigma_hat, psum, d, M):
     return W, rho
 
 
-def _init_L_Phi(Sigma_hat, W, psum, p, k):
+def init_L_Phi(Sigma_hat, W, psum, p, k):
     """Initializes L and Phi for a given W, Sigma_hat.
 
     Args:
@@ -80,7 +80,7 @@ def _init_L_Phi(Sigma_hat, W, psum, p, k):
     return L, Phi
 
 
-def _rho_mp_sim(N: int, p: List[int], nsims=100, device='cpu'):
+def rho_mp_sim(N: int, p: List[int], nsims=100, device='cpu'):
     """Calculates the MCCA (Parra) solution to random data.
 
     Args:

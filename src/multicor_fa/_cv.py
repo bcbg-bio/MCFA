@@ -1,15 +1,18 @@
 # pylint: disable=invalid-name
 """CV routines for MCFA model.
 
-Do not call directly, see mcfa.py for usage.
+Do not call directly, see mcfa_model.py for usage.
 """
 
 import pandas as pd
 import torch
 from typing import Iterable, List, Union
+import numpy as np
+from sklearn import preprocessing
+from multicor_fa import mcfa_model, _em
 
 
-def _cv_one_iter(
+def cv_one_iter(
         indices, Y: Iterable[pd.DataFrame],
         Z: pd.DataFrame, X: Iterable[pd.DataFrame],
         n_pcs: Union[str, List[int]] = 'infer',
@@ -17,6 +20,50 @@ def _cv_one_iter(
         center: bool = True, scale: bool = True, init: str = 'avgvar',
         maxit: int = 1000, delta: float = 1e-6,
         device = 'cpu', rcond: float = 1e-8, verbose: bool = False):
+    """Runs one iteration of k-fold cross-validation.
+
+    Args:
+      indices: Tuple of (it, (train_idx, test_idx))
+         - it: Integer. Current iteration. 
+         - train_idx: Numpy array. Indices of training data array. 
+         - test_idx: Numpy array. Indices of test data array. 
+      Y: Iterable of N (samples) by p_m (features) pandas DataFrames. The
+         datasets to analyze.
+      Z: Iterable of d (shared factors) by N (samples) pandas DataFrames. The 
+         shared factor set used to calculate gene statistics. 
+      X: Iterable of k_m (private factors) by N (samples) pandas DataFrames. 
+         The private factor set for each dataset. 
+      n_pcs: Iterable of integers representing number of predefined principal 
+         components for each dataset, or string "infer" if inferring the number 
+         of principal components. 
+      d: Integer, 'infer', or 'all'. Dimensionality of the hidden space.
+         If 'infer' a simulation will be done to determine the number
+         of correlated components to keep.
+      k: List of integers, 'infer', or None. Number of private components
+         to model per dataset. If 'infer', k is set to n_pcs - d. If None,
+         no private components will be modeled.
+      center: Bool. Whether to center the data (default True recommended).
+      scale: Bool. Whether to scale the data (default True recommended).
+      init: Either 'avgvar', 'avgnorm' or 'random'. Initialization
+         strategy. 'avgvar' (default) maximizes the sum of correlations
+         with a global mahalalanobis constraint (eg Parra 2019), 'avgnorm'
+         does the same with a global euclidean constraint (eg Seurat),
+         and random samples W from a std normal while setting Phi to I. Note
+         that if n_pcs is not 'all', the model is fit explicitly to the PCs
+         of each dataset and therefore the 'avgvar' and 'avgnorm'
+         initializations are equivalent.
+      maxit: Integer. Maximum number of iterations of the pgm to run. Set to 0
+         to run none and return only the initial solution.
+      delta: Float. Convergance tolerance for EM. Set to None to run for
+         maxit iterations.
+      device: 'cpu' or 'gpu'. How to run the MCFA model. 
+    Returns: 
+      Tuple of Z_te, X_te, nrmse_tr, nrmse_te
+         - Z_te: Tensor. Shared factors computed from test data. 
+         - X_te: Iterable of tensors. Private factors from test data. 
+         - nrmse_tr: List of floats. NRMSE metrics for training data. 
+         - nrmse_te: List of floats. NRMSE metrics for test data.
+    """
     # TODO(brielin): At the moment, this is assuming that we're doing
     #   pc-based analysis. Some modification is required if we aren't.
     (it, (train_idx, test_idx)) = indices
@@ -43,7 +90,7 @@ def _cv_one_iter(
                                 index=Y_te_m.index, columns=Y_te_m.columns)
                    for scaler, Y_te_m in zip(scalers, Y_test)]
 
-    cv_res = fit(Y_train, n_pcs=n_pcs, d=d, k=k,
+    cv_res = mcfa_model.fit(Y_train, n_pcs=n_pcs, d=d, k=k,
                  center=True, scale=True,
                  init=init, maxit=maxit,
                  delta=delta, device=device,

@@ -1,7 +1,7 @@
 # pylint: disable=invalid-name
 """PCA routines for MCFA model.
 
-Do not call directly, see mcfa.py for usage.
+Do not call directly, see mcfa_model.py for usage.
 """
 
 import numpy as np
