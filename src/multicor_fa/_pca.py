@@ -7,7 +7,7 @@ Do not call directly, see mcfa_model.py for usage.
 import numpy as np
 import pandas as pd
 import torch
-from dataclasses import dataclass
+from dataclasses import dataclass, astuple
 from sklearn import preprocessing
 
 
@@ -35,7 +35,7 @@ def _ppca_missing(X: torch.Tensor, k: int = 'infer') -> PCARes:
         A PCARes instance.
     """
     raise NotImplementedError('TBD.')
-    
+
 
 def _pca(X: torch.Tensor, k: int = 'infer', calc_V = True) -> PCARes:
     """Basic PCA implementation.
@@ -87,7 +87,7 @@ def _pca(X: torch.Tensor, k: int = 'infer', calc_V = True) -> PCARes:
         V = V if calc_V else torch.eye(k, dtype=torch.double)
     var_exp = S_k**2 / torch.sum(S**2)
 
-    return U, V, S_k, var_exp, k, N, D, mp_dim
+    return PCARes(None, var_exp, U, S_k, V, k, N, D, mp_dim)
 
 
 def pca(X: pd.DataFrame, k: int = 'infer', center: bool = True,
@@ -105,8 +105,9 @@ def pca(X: pd.DataFrame, k: int = 'infer', center: bool = True,
         scale: bool. True to variance-scale the columns of X to 1.0.
         calc_V: True to track the PC loadings (right singular vectors)
           of X. Setting to False can save substantial memory if X is very
-          wide. Ignored if missing=='impute'.
-        missing: String, one of 'raise', 'ignore' or 'impute'
+          wide. Ignored if missing=='impute_model'.
+        missing: String, one of 'raise', 'drop', 'impute_mean', 'ignore' or 
+          'impute_model'
     Returns:
         A PCARes instance.
     """
@@ -127,18 +128,19 @@ def pca(X: pd.DataFrame, k: int = 'infer', center: bool = True,
         X = torch.from_numpy(X.values)
 
     pcares = None
-    if missing == 'ignore':
-        U, V, S_k, var_exp, k, N, D, mp_dim = _pca(X, k, calc_V)
-    elif missing == 'impute':
-        U, V, S_k, var_exp, k, N, D, mp_dim = _ppca_missing(X, k)
+    if missing == 'impute_model':
+        pcares = _ppca_missing(X, k)
+    else:
+        pcares = _pca(X, k, calc_V)
+    _, var_exp, U, S_k, V, k, N, D, mp_dim = astuple(pcares)
 
     if len(drop_index) > 0:
         for i in drop_index:
             new_row = torch.empty((1, k))
             new_row[:,:] = float('nan')
-            if drop_index == 0:
+            if i == 0:
                 U = torch.cat((new_row, U), 0)
-            elif drop_index < len(pcares.U):
+            elif i < len(U):
                 U = torch.cat((U[0:i,:], new_row, U[i:,:]), 0)
             else:
                 U = torch.cat((U, new_row), 0)

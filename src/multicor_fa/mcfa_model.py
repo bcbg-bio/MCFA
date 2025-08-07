@@ -183,14 +183,14 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         k: 'infer', None, or list of integers. Number of private components
           to model per dataset. If 'infer', k is set to n_pcs - d. If None,
           no private components will be modeled.
-        missing_entries: Either 'raise', 'drop', 'skip', 'impute_model', or 'impute_mean'.
+        missing_entries: Either 'raise', 'drop', 'ignore', 'impute_model', or 'impute_mean'.
           Instructions for what to do with missing entries of observed samples
-          in each mode. 'raise' will raise an error, 'skip' will ignore these
+          in each mode. 'raise' will raise an error, 'ignore' will ignore these
           terms in the likelihood, 'impute_model' will impute them using
           ppca, 'impute_mean' will impute them with the mean of other samples.
-        missing_modes: Either 'raise', 'drop', 'skip', 'impute_model', or 'impute_mean'.
+        missing_modes: Either 'raise', 'drop', 'ignore', 'impute_model', or 'impute_mean'.
           Instructions for what to do with unobserved data modes in some samples.
-          'raise' will raise an error if any are detected. 'skip' will ignore
+          'raise' will raise an error if any are detected. 'ignore' will ignore
           these samples in the likelihood. 'impute_model' will impute them using
           the model. 'impute_mean' will impute them using the mean of other
           observations.
@@ -243,16 +243,16 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
             'n_pcs must be "infer", "all" or a list of integers.')
 
     if isinstance(missing_entries, str) & \
-    (missing_entries not in ['raise', 'drop', 'skip', 'impute_model', 'impute_mean']):
+    (missing_entries not in ['raise', 'drop', 'ignore', 'impute_model', 'impute_mean']):
         raise NotImplementedError(
-            'missing_entries must be "raise", "drop", "skip",'\
+            'missing_entries must be "raise", "drop", "ignore",'\
             ' "impute_model" or "impute_mean".')
 
     if isinstance(missing_modes, str) & \
-    (missing_modes not in ['raise', 'drop', 'skip', 'impute_model', 'impute_mean']):
+    (missing_modes not in ['raise', 'drop', 'ignore', 'impute_model', 'impute_mean']):
         raise NotImplementedError(
             'missing_modes must be "raise", "drop",'\
-            '"skip", "impute_model" or "impute_mean".')
+            '"ignore", "impute_model" or "impute_mean".')
 
     ds_names = None
     if isinstance(Y, dict):
@@ -272,8 +272,8 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         elif missing_entries == 'impute_mean':
             print('Missing values detected in input, imputing with mean.')
             [Y_m.fillna(Y_m.mean(), inplace=True) for Y_m in Y]
-        elif missing_entries == 'skip':
-            print('Missing values detected in input, they will be skipped.')
+        elif missing_entries == 'ignore':
+            print('Missing values detected in input, they will be ignored.')
         elif missing_entries == 'impute_model':
             print('Missing values detected in input, they will be imputed during'
                   'model fitting.')
@@ -302,7 +302,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
                     columns=Y_m.columns
                 )]).fillna(Y_m.mean()) for Y_m in Y]
             use_samples = all_samples
-        elif missing_modes == 'skip':
+        elif missing_modes == 'ignore':
             raise NotImplementedError
         elif missing_modes == 'impute_model':
             print('Missing modes detected in input, they will be imputed during'
@@ -341,7 +341,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
 
     if verbose: print('Calculating data PCs.')
 
-    Y_pcs = [_pca.pca(Y_m, n_pc_m, center, scale)
+    Y_pcs = [_pca.pca(Y_m, n_pc_m, center, scale, missing=missing_entries)
              for Y_m, n_pc_m in zip(Y, n_pcs)]
     if informative and result_space == 'pc':
         feature_names = [['pc_' + str(k+1) for k in range(Y_pc.k)]
