@@ -37,7 +37,11 @@ def init_var_W(Y_pcs, psum, d, informative):
         to original data space.
     """
     U_all = torch.cat([pc.U for pc in Y_pcs], dim = 1)
-    UTU = U_all.T @ U_all
+    if torch.any(torch.isnan(U_all), dim=1).any():
+        U_nonzero = torch.nan_to_num(U_all, nan=0.0)
+        UTU = U_nonzero.T @ U_nonzero
+    else:
+        UTU = U_all.T @ U_all
 
     W, _, vals = _ppca(UTU, d)
     W = [(W[i:j, :].T * pc.S).T for i, j, pc in zip(psum[:-1], psum[1:], Y_pcs)]

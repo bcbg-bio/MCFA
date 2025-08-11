@@ -380,7 +380,11 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         if verbose: print('Inferring the shared dimensionality.')
         rho_min, _ = _initializers.rho_mp_sim(N, p)
         U_all = torch.cat([pc.U for pc in Y_pcs], dim = 1)
-        UTU = U_all.T @ U_all
+        if torch.any(torch.isnan(U_all), dim=1).any():
+            U_nonzero = torch.nan_to_num(U_all, nan=0.0)
+            UTU = U_nonzero.T @ U_nonzero
+        else:
+            UTU = U_all.T @ U_all
         rho0 = torch.linalg.eigvalsh(UTU)
         d = sum(rho0 > rho_min)
         if verbose:
@@ -428,8 +432,8 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
     else:
         X_names = [['X' + str(i+1) + '_' + str(m+1) for i in range(k_m)]
                    for m, k_m in enumerate(k)]
-    Z = pd.DataFrame(Z.numpy(), index=common_samples, columns=Z_names)
-    X = [pd.DataFrame(X_m.numpy(), index=common_samples, columns=names)
+    Z = pd.DataFrame(Z.numpy(), index=use_samples, columns=Z_names)
+    X = [pd.DataFrame(X_m.numpy(), index=use_samples, columns=names)
          for X_m, names in zip(X, X_names)]
     W = [pd.DataFrame(W_m.numpy(), index=names, columns=Z_names)
          for W_m, names in zip(W, feature_names)]
