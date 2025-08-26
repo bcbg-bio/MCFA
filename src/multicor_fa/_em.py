@@ -23,7 +23,7 @@ def _EM_step_no_private_stable(
       Sigma: p_all by p_all torch tensor, Y.T @ Y / N.
       p: List of integers with the dimensionality of each dataset.
       rcond: Condition number for least squares.
-      impute_modes: Whether to impute missing data modes. 
+      impute: Whether to impute missing data modes. 
     Returns:
       Tuple W_next, Phi_next with updated parameters.
     """
@@ -31,27 +31,47 @@ def _EM_step_no_private_stable(
     if device == 'gpu': raise NotImplementedError()
     d = W.shape[1]
     N = Y.shape[0]
-    if torch.isnan(Y).any():
+    p_all = sum(p)
+    missing_Y = torch.isnan(Y).any()
+
+    if missing_Y:
         if not impute:
-            raise ValueError("Y contains missing values but impute is False")
+            raise ValueError('Y contains missing values but impute is False')
         else:
-            obs_mask = ~torch.isnan(Y)  # observed components
+            # Observed components
+            obs_mask = ~torch.isnan(Y)
+            # Number of samples with missing modalities
+            N_m = int((~obs_mask).any(dim=1).count_nonzero())
             Y = torch.nan_to_num(Y, 0)
+
     Q_inv_W = torch.linalg.lstsq(W @ W.T + Phi, W, rcond=rcond).solution
     E_z = Y @ Q_inv_W
     sum_E_zzT = N*torch.eye(d) - N*(W.T @ Q_inv_W) + E_z.T @ E_z
-    if torch.isnan(Y).any():
-        E_y = (W @ W.T) @ \
-              (torch.linalg.lstsq(W @ W.T + Phi, Y.T, rcond=rcond).solution)
-        E_yz = (W - (W @ W.T) @ (Q_inv_W) + (E_y @ E_z.T)).T
-        sum_E_yzT = torch.zeros((W.shape[0], d))
-        sum_E_yzT += (Y.T @ E_z) * obs_mask.T
-        sum_E_yzT += E_yz * (~obs_mask.T)
+    S22 = W @ W.T + Phi
+
+    if missing_Y and impute:
+        E_y = (W @ W.T) @ (torch.linalg.lstsq(S22, Y.T, rcond=rcond).solution)
+        E_y_mask = E_y * (~obs_mask.T) + 0.0
+
+        E_yzT = N_m*(W - ((W @ W.T) @ Q_inv_W)) + (E_y_mask @ E_z)
+        E_yyT = N_m*((W @ W.T) - S22 \
+                @ (torch.linalg.lstsq(S22, (W @ W.T), rcond=rcond).solution)) \
+                + (E_y_mask @ E_y_mask.T)
+
+        sum_E_yzT = torch.zeros((p_all, d)).double()
+        sum_E_yzT += Y.T @ E_z
+        sum_E_yzT += E_yzT
+
+        sum_E_yyT = torch.zeros((p_all, p_all)).double()
+        sum_E_yyT += Y.T @ Y
+        sum_E_yyT += E_yyT
     else:
-        sum_E_yzT = E_z.T @ Y
-    W_next = torch.linalg.lstsq(sum_E_zzT, sum_E_yzT, rcond=rcond).solution.T
+        sum_E_yzT = Y.T @ E_z
+        sum_E_yyT = Y.T @ Y
+
+    W_next = torch.linalg.lstsq(sum_E_zzT, sum_E_yzT.T, rcond=rcond).solution.T
     # Phi_next = Sigma - (Y.T @ E_z @ W_next.T)/N
-    Phi_next = Sigma - (W_next @ sum_E_yzT)/N
+    Phi_next = (sum_E_yyT - (W_next @ sum_E_yzT.T))/N
     psum = np.concatenate([[0], np.cumsum(p, 0)])
     for i_l, i_r in zip(psum[:-1], psum[1:]):
         Phi_next[i_l:i_r, i_r:] = 0
@@ -82,14 +102,19 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
     N, _ = Y.shape
     d = W.shape[1]
     k_all = L.shape[1]
+    p_all = Y.shape[1]
     psum = np.concatenate([[0], np.cumsum(p, 0)])
     ksum = np.concatenate([[0], np.cumsum(k, 0)])
+    missing_Y = torch.isnan(Y).any()
 
-    if torch.isnan(Y).any():
+    if missing_Y:
         if not impute:
-            raise ValueError("Y contains missing values but impute_modes is False")
+            raise ValueError('Y contains missing values but impute_modes is False')
         else:
-            obs_mask = ~torch.isnan(Y)  # observed components
+            # Observed components
+            obs_mask = ~torch.isnan(Y)
+            # Number of samples with missing modalities
+            N_m = int((~obs_mask).any(dim=1).count_nonzero())
             Y = torch.nan_to_num(Y, 0)
 
     S21 = torch.cat([W, L], axis=1).to(device)
@@ -104,31 +129,35 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
     zx_sum = mom_zx_zxT_sum[:d, d:].to(device)
     xx_sum = mom_zx_zxT_sum[d:, d:].to(device)
 
-    if impute and torch.isnan(Y).any():
-        E_y = (W @ W.T) @ (torch.linalg.lstsq(S22, Y, rcond=rcond).solution)
-        E_z = E_z_x[:d, :]
-        E_x = E_z_x[d:, :]
-        E_yzT = (W - (W @ W.T) @ S22inv_S21[:, :d] + (E_y @ E_z.T)).T
-        E_yxT = (L - (W @ W.T) @ S22inv_S21[:, d:] + (E_y @ E_x.T)).T
-        E_yyT = S22 - (W @ W.T) @ \
-                (torch.linalg.lstsq(S22, (W @ W.T), rcond=rcond).solution) + \
-                (E_y @ E_y.T)
+    if impute and missing_Y:
+        E_y = (W @ W.T + L @ L.T) \
+            @ (torch.linalg.lstsq(S22, Y.T, rcond=rcond).solution)
+        E_y_mask = E_y * (~obs_mask.T) + 0.0
 
-        sum_E_yzT = torch.zeros((W.shape[0], d))
-        sum_E_yzT += (Y.T @ E_z_x[:d, :].T) * obs_mask.T
-        sum_E_yzT += E_yzT * (~obs_mask.T)
+        # Make this only over missing samples (sum over N_m)
+        E_yzT = N_m*(W - (W @ W.T + L @ L.T) @ S22inv_S21[:, :d]) \
+            + (E_y_mask @ E_z_x[:d, :].T)
+        E_yxT = N_m*(L - (W @ W.T + L @ L.T) @ S22inv_S21[:, d:]) \
+            + (E_y_mask @ E_z_x[d:, :].T)
+        E_yyT = N_m*(S22 - (W @ W.T + L @ L.T) \
+            @ (torch.linalg.lstsq(S22, W @ W.T, rcond=rcond).solution)) \
+            + (E_y_mask @ E_y_mask.T)
 
-        sum_E_yxT = torch.zeros((L.shape[0], d))
-        sum_E_yxT += (Y.T @ E_z_x[d:, :].T) * obs_mask.T
-        sum_E_yxT += E_yxT * (~obs_mask.T)
+        sum_E_yzT = torch.zeros((p_all, d)).double()
+        sum_E_yzT += Y.T @ E_z_x[:d, :].T
+        sum_E_yzT += E_yzT
 
-        sum_E_yyT = torch.zeros(Y.shape)
-        sum_E_yyT += Sigma * N * obs_mask.T
-        sum_E_yyT += E_yyT * (~obs_mask.T)
+        sum_E_yxT = torch.zeros((p_all, k_all)).double()
+        sum_E_yxT += Y.T @ E_z_x[d:, :].T
+        sum_E_yxT += E_yxT
+
+        sum_E_yyT = torch.zeros((p_all, p_all)).double()
+        sum_E_yyT += Y.T @ Y
+        sum_E_yyT += E_yyT
     else:
         sum_E_yzT = Y.T @ E_z_x[:d, :].T
         sum_E_yxT = Y.T @ E_z_x[d:, :].T
-        sum_E_yyT = Sigma * N
+        sum_E_yyT = Y.T @ Y
 
     W_next = torch.linalg.lstsq(zz_sum, (sum_E_yzT - L @ zx_sum.T).T,
                                 rcond=rcond).solution.T
@@ -138,11 +167,11 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
               for i, j, l, m in zip(psum[:-1], psum[1:], ksum[:-1], ksum[1:])]
     L_next = torch.block_diag(*L_next)
     Phi_next = sum_E_yyT + \
-        W @ zz_sum @ W.T + \
-        L @ xx_sum @ L.T + \
-        2 * L @ zx_sum.T @ W.T - \
-        2 * sum_E_yzT @ W.T - \
-        2 * sum_E_yxT @ L.T
+        W_next @ zz_sum @ W_next.T + \
+        L_next @ xx_sum @ L_next.T + \
+        2 * L_next @ zx_sum.T @ W_next.T - \
+        2 * sum_E_yzT @ W_next.T - \
+        2 * sum_E_yxT @ L_next.T
     Phi_next = torch.diag(torch.diagonal(Phi_next / N)).to(device)
     return W_next, L_next, Phi_next
 
@@ -242,6 +271,12 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
        delta: Break when change in likelihood < delta.
        verbose: True to print progress.
        impute: Whether to impute missing data. 
+    Returns:
+       W: p_all=sum(p) by d tensor. New estimate of W.
+       L: p_all by k_all=sum(k) block diagonal tensor. New estimate of L.
+       Phi: p_all by p_all tensor. New estimate of Phi.
+       l: List of current and new log-likelihood values. 
+       cd: 
     """
     # TODO(brielin): Figure out a way to do this calculation efficiently
     #   without cat/block_diag on W, L, Phi
