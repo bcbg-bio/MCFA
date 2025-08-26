@@ -403,8 +403,10 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         k = [max(pca_m.k - d, 0) for pca_m in Y_pcs]
 
     if init == 'random':
-        L0 = None if k is None else [
-            torch.randn((p_m, k_m)).double() for k_m, p_m in zip(k, p)]
+        if k is None or all(k_m == 0 for k_m in k):
+            L0 = None
+        else:
+            L0 = [torch.randn((p_m, k_m)).double() for k_m, p_m in zip(k, p)]
         Phi0 = [torch.eye(p_m) for p_m in p]
     else:
         L0, Phi0 = _initializers.init_L_Phi(Sigma_hat, W0, psum, p, k)
@@ -433,8 +435,13 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         X_names = [['X' + str(i+1) + '_' + str(m+1) for i in range(k_m)]
                    for m, k_m in enumerate(k)]
     Z = pd.DataFrame(Z.numpy(), index=use_samples, columns=Z_names)
-    X = [pd.DataFrame(X_m.numpy(), index=use_samples, columns=names)
+    if X is not None:
+        X = [pd.DataFrame(X_m.numpy(), index=use_samples, columns=names)
          for X_m, names in zip(X, X_names)]
+    else:
+        X = [pd.DataFrame(np.zeros((len(use_samples), len(names))),
+                          index=use_samples, columns=names)
+             for names in X_names]
     W = [pd.DataFrame(W_m.numpy(), index=names, columns=Z_names)
          for W_m, names in zip(W, feature_names)]
     rho = pd.Series(rho, index=Z_names)
@@ -457,6 +464,12 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
             var_exp_X = [l/L_m.shape[0] for l, L_m in zip(lam, L)]
         else:
             var_exp_X = [l/sum(Y_m.var(0)) for l, Y_m in zip(lam, Y)]
+    else:
+        L = [pd.DataFrame(np.zeros((len(ind_names), len(col_names))),
+                          index=ind_names, columns=col_names)
+             for ind_names, col_names in zip(feature_names, X_names)]
+        lam = [0 for L_m in L]
+        var_exp_X = [0 for L_m in L]
 
     if ds_names is not None:
         X = dict(zip(ds_names, X))

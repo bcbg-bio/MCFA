@@ -69,7 +69,7 @@ def init_L_Phi(Sigma_hat, W, psum, p, k):
     Args:
       Sigma_hat: Cross correlation matrix to model.
       W: LIST
-      psum: List of break indices for inidivudal datasets.
+      psum: List of break indices for individual datasets.
       p: List of integers, dimensions of datasets.
       k: List of integers or None, dimensions of private spaces.
     """
@@ -77,7 +77,7 @@ def init_L_Phi(Sigma_hat, W, psum, p, k):
            for W_m, i, j in zip(W, psum[:-1], psum[1:])]
 
     L = None
-    if k is not None:
+    if k is not None and all(k_m > 0 for k_m in k):
         resid_pcas = [_ppca(Phi_m, k_m) for k_m, Phi_m in zip(k, Phi)]
         L, s2s, _ = list(map(list, zip(*resid_pcas)))
         Phi = [torch.diag(torch.tensor([s2]*p_m)) for s2, p_m in zip(s2s, p)]
