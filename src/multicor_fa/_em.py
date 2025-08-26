@@ -62,7 +62,7 @@ def _EM_step_no_private_stable(
         sum_E_yzT += Y.T @ E_z
         sum_E_yzT += E_yzT
 
-        sum_E_yyT = torch.zeros((p_all, p_all)).double()
+        sum_E_yyT = torch.zeros((p_all, p_all))
         sum_E_yyT += Y.T @ Y
         sum_E_yyT += E_yyT
     else:
@@ -151,7 +151,7 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
         sum_E_yxT += Y.T @ E_z_x[d:, :].T
         sum_E_yxT += E_yxT
 
-        sum_E_yyT = torch.zeros((p_all, p_all)).double()
+        sum_E_yyT = torch.zeros((p_all, p_all))
         sum_E_yyT += Y.T @ Y
         sum_E_yyT += E_yyT
     else:

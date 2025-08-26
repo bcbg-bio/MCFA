@@ -70,7 +70,6 @@ def simulate_factors(sim_params: Params, private_var: bool = True):
 
     return Z, X
 
-
 def simulate_params(sim_params: Params, private_var: bool = True):
     """Randomly generates loadings W and L and specific variance Phi.
 
@@ -151,7 +150,7 @@ def simulate_noise(sim_params : Params, Phi : List[torch.tensor],
             torch.matmul(A[i], torch.randn(p[i], n))
             for i in range(len(p))
         ]
-    return E
+    return [E_m.double() for E_m in E]
 
 
 def simulate_data(sim_params : Params, private_var : bool = True):
@@ -242,13 +241,13 @@ def initialize_params(W : List[torch.tensor], L : List[torch.tensor],
         - Phi_init: List of p_m (features) by p_m (features) tensors. 
                   Identity matrices representing initial covariance values. 
     """
-    W_init = [torch.randn(w.shape) for w in W]
+    W_init = [torch.randn(w.shape).double() for w in W]
 
     if private_var:
-        L_init = [torch.randn(l.shape) for l in L]
+        L_init = [torch.randn(l.shape).double() for l in L]
     else:
         L_init = None
 
-    Phi_init = [torch.eye(p.shape[0]) for p in Phi]
+    Phi_init = [torch.eye(p.shape[0]).double() for p in Phi]
 
     return W_init, L_init, Phi_init
