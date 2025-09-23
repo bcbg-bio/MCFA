@@ -40,8 +40,8 @@ def _EM_step_no_private_stable(
         else:
             # Observed components
             obs_mask = ~torch.isnan(Y)
-            # Number of samples with missing modalities
-            N_m = int((~obs_mask).any(dim=1).count_nonzero())
+            # Number of samples missing per feature
+            N_m = (~obs_mask).count_nonzero(axis=0).reshape((-1,1))
             Y = torch.nan_to_num(Y, 0)
 
     Q_inv_W = torch.linalg.lstsq(W @ W.T + Phi, W, rcond=rcond).solution
@@ -113,8 +113,8 @@ def _EM_step_full_stable(W: torch.tensor, L: torch.tensor, Phi: torch.tensor,
         else:
             # Observed components
             obs_mask = ~torch.isnan(Y)
-            # Number of samples with missing modalities
-            N_m = int((~obs_mask).any(dim=1).count_nonzero())
+            # Number of samples missing per feature
+            N_m = (~obs_mask).count_nonzero(axis=0).reshape((-1,1))
             Y = torch.nan_to_num(Y, 0)
 
     S21 = torch.cat([W, L], axis=1).to(device)
@@ -262,7 +262,6 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
     Args:
        Y: N by p_all torch tensor, the data.
        Sigma_hat: Y.T @ Y / N
-       p: List of int, dimensions of individual datasets.
        W: p_all=sum(p) by d tensor. Current estimate of W.
        L: p_all by k_all=sum(k) block diagonal tensor. Current estimate of L.
        Phi: p_all by p_all tensor. Current estimate of Phi.
