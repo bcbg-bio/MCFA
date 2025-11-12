@@ -116,7 +116,7 @@ def pca(X: pd.DataFrame, k: int = 'infer', center: bool = True,
     all_samples = X.index
     drop_index = np.asarray(pd.isna(X).all(axis=1)).nonzero()[0]
     if len(drop_index) > 0:
-        X.drop(X.index[drop_index], inplace=True)
+        X = X.drop(X.index[drop_index])
 
     if (missing == 'raise') & pd.isna(X).any(axis = None):
         raise ValueError('Missing data not expected in PCA input.')
