@@ -39,10 +39,10 @@ def _EM_step_no_private_stable(
             raise ValueError('Y contains missing values but impute is False')
         else:
             # Observed and missing components
-            obs_mask = ~torch.isnan(Y) + 0.0
-            miss_mask = torch.isnan(Y) + 0.0
+            obs_mask = ~torch.isnan(Y)
+            miss_mask = torch.isnan(Y)
             # Number of samples missing per feature
-            N_m = miss_mask.count_nonzero(axis=0).reshape((-1,1)).to(Y.dtype)
+            N_m = miss_mask.count_nonzero(axis=0).reshape((-1,1))
             if Y_imp is None:
                 # Replace NA with zeros
                 Y = torch.nan_to_num(Y, 0)
@@ -65,7 +65,7 @@ def _EM_step_no_private_stable(
                 @ (torch.linalg.lstsq(S22, W @ W.T, rcond=rcond).solution)) \
                 + (E_y_mask @ E_y_mask.T)
 
-        sum_E_yzT = torch.zeros((p_all, d)).double()
+        sum_E_yzT = torch.zeros((p_all, d))
         sum_E_yzT += Y_mask.T @ E_z
         sum_E_yzT += E_yzT
 
@@ -125,10 +125,10 @@ def _EM_step_full_stable(W: torch.Tensor, L: torch.Tensor, Phi: torch.Tensor,
             raise ValueError('Y contains missing values but impute is False')
         else:
             # Observed and missing components
-            obs_mask = ~torch.isnan(Y) + 0.0
-            miss_mask = torch.isnan(Y) + 0.0
+            obs_mask = ~torch.isnan(Y)
+            miss_mask = torch.isnan(Y)
             # Number of samples missing per feature
-            N_m = miss_mask.count_nonzero(axis=0).reshape((-1,1)).to(Y.dtype)
+            N_m = miss_mask.count_nonzero(axis=0).reshape((-1,1))
             if Y_imp is None:
                 # Replace NA with zeros
                 Y = torch.nan_to_num(Y, 0)
@@ -163,11 +163,11 @@ def _EM_step_full_stable(W: torch.Tensor, L: torch.Tensor, Phi: torch.Tensor,
             @ (torch.linalg.lstsq(S22, W @ W.T, rcond=rcond).solution)) \
             + (E_y_mask @ E_y_mask.T)
 
-        sum_E_yzT = torch.zeros((p_all, d)).double()
+        sum_E_yzT = torch.zeros((p_all, d))
         sum_E_yzT += Y_mask.T @ E_z_x[:d, :].T
         sum_E_yzT += E_yzT
 
-        sum_E_yxT = torch.zeros((p_all, k_all)).double()
+        sum_E_yxT = torch.zeros((p_all, k_all))
         sum_E_yxT += Y_mask.T @ E_z_x[d:, :].T
         sum_E_yxT += E_yxT
 
