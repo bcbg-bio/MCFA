@@ -9,11 +9,88 @@ import torch
 import numpy as np
 from typing import List
 
+def _approximate_impute(Y: torch.Tensor, E_y: torch.tensor, N_m: torch.Tensor,
+                    obs_mask: torch.Tensor, miss_mask: torch.Tensor,
+                    S22: torch.Tensor, S22inv_S21: torch.Tensor,
+                    E_z_x: torch.Tensor, W: torch.Tensor, L: torch.Tensor|None,
+                    rcond: float = 1e-08):
+    d = W.shape[1]
+    Y_mask = Y * obs_mask
+    E_y_mask = (E_y * miss_mask).T
+    E_yy_mask = miss_mask.T.float() @ miss_mask.float()
+    E_yzT = N_m*(W - (W @ W.T) @ S22inv_S21[:, :d]) \
+        + (E_y_mask @ E_z_x[:d, :].T)
+    E_yyT = E_yy_mask * (S22 - ((W @ W.T) \
+        @ (torch.linalg.lstsq(S22, W @ W.T, rcond=rcond).solution))) \
+        + E_y_mask @ E_y_mask.T
+    sum_E_yzT = Y_mask.T @ E_z_x[:d, :].T
+    sum_E_yzT += E_yzT
+    sum_E_yyT = Y_mask.T @ Y_mask
+    sum_E_yyT += E_yyT
+    if L is not None:
+        E_yxT = N_m*(L - (W @ W.T) @ S22inv_S21[:, d:]) \
+            + (E_y_mask @ E_z_x[d:, :].T)
+        sum_E_yxT = Y_mask.T @ E_z_x[d:, :].T
+        sum_E_yxT += E_yxT
+    else:
+        sum_E_yxT = None
+    return sum_E_yzT, sum_E_yxT, sum_E_yyT
+
+
+def _exact_impute(y_i: torch.Tensor, p_all: int, d: int, k_all: int,
+                  obs_mask: torch.Tensor, miss_mask: torch.Tensor,
+                  W: torch.Tensor, L: torch.Tensor|None, Phi: torch.Tensor,
+                  rcond: float=1e-08):
+    obs_idx = torch.where(obs_mask)[0]
+    miss_idx = torch.where(miss_mask)[0]
+    y_oi = y_i[:, obs_idx]
+    W_o = W[obs_idx, :]
+    W_m = W[miss_idx, :]
+    Phi_o = Phi[obs_idx][:, obs_idx]
+    Phi_m = Phi[miss_idx][:, miss_idx]
+    if L is not None:
+        L_o = L[obs_idx, :]
+        L_m = L[miss_mask, :]
+        S21_o = torch.cat([W_o, L_o], axis=1)
+        S22_o = W_o @ W_o.T + L_o @ L_o.T + Phi_o
+        S22_m = W_m @ W_m.T + L_m @ L_m.T + Phi_m
+    else:
+        S21_o = W_o
+        S22_o = W_o @ W_o.T + Phi_o
+        S22_m = W_m @ W_m.T + Phi_m
+    S22inv_S21_o = torch.linalg.lstsq(S22_o, S21_o, rcond=rcond).solution
+    E_z_x = y_oi @ S22inv_S21_o
+    zx_zxT_sum = (torch.eye(k_all + d) - (S22inv_S21_o.T @ S21_o) +
+                    E_z_x.T @ E_z_x)
+    zz = zx_zxT_sum[:d, :d]
+    E_y = (W_m@W_o.T) @ \
+        torch.linalg.lstsq(S22_o, y_oi.T, rcond=rcond).solution
+    E_yz = torch.zeros((p_all, d))
+    E_yz[obs_idx] = y_oi.T @ E_z_x[:, :d]
+    E_yz[miss_idx] = W_m - (W_m@W_o.T) @ S22inv_S21_o[:, :d] + \
+                     E_y@E_z_x[:, :d]
+    E_yy = torch.zeros((p_all, p_all))
+    E_yy[obs_idx.unsqueeze(1), obs_idx] = y_oi.T @ y_oi
+    E_yy[miss_idx.unsqueeze(1), miss_idx] = S22_m - (W_m@W_o.T) @ \
+        torch.linalg.lstsq(S22_o, W_o@W_m.T, rcond=rcond).solution + E_y@E_y.T
+    if L is not None:
+        zx = zx_zxT_sum[:d, d:]
+        xx = zx_zxT_sum[d:, d:]
+        E_yx = torch.zeros((p_all, k_all))
+        E_yx[obs_idx] = y_oi.T @ E_z_x[:, d:] # p x k
+        E_yx[miss_idx] = L_m - (W_m@W_o.T) @ S22inv_S21_o[:, d:] + \
+                         E_y@E_z_x[:, d:]
+    else:
+        zx = None
+        xx = None
+        E_yx = None
+    return zz, zx, xx, E_yz, E_yx, E_yy
+
 
 def _EM_step_no_private_stable(
         W: torch.Tensor, Phi: torch.Tensor, Y: torch.Tensor,
-        Y_imp: None | torch.Tensor, p: List[int], device = 'cpu',
-        rcond: float = 1e-08, impute: bool = False):
+        Y_imp: torch.Tensor, p: List[int], device = 'cpu',
+        rcond: float = 1e-08, impute: str = 'none'):
     """One EM step when there is no private structure.
 
     Args:
@@ -24,7 +101,7 @@ def _EM_step_no_private_stable(
         Y with imputed missing values filled in when impute=True.
       p: List of integers with the dimensionality of each dataset.
       rcond: Condition number for least squares.
-      impute: Whether to impute missing data modes. 
+      impute: Str, one of [none, exact, approx]. How to impute missing data. 
     Returns:
       Tuple W_next, Phi_next with updated parameters.
     """
@@ -35,67 +112,59 @@ def _EM_step_no_private_stable(
     missing_Y = torch.isnan(Y).any()
 
     if missing_Y:
-        if not impute:
-            raise ValueError('Y contains missing values but impute is False')
-        else:
-            # Observed and missing components
-            obs_mask = ~torch.isnan(Y)
-            miss_mask = torch.isnan(Y)
-            # Number of samples missing per feature
+        obs_mask = ~torch.isnan(Y)
+        miss_mask = torch.isnan(Y)
+        if impute == 'none':
+            raise ValueError('Y contains missing values but impute is "none"')
+        elif impute == 'exact':
+            sum_E_zzT = torch.zeros((d, d))
+            sum_E_yzT = torch.zeros((p_all, d))
+            sum_E_yyT = torch.zeros((p_all, p_all))
+            for i in range(N):
+                y_i = Y[i].reshape(1,-1)
+                E_zz, _, _, E_yz, _, E_yy = _exact_impute(y_i, p_all, d,
+                    0, obs_mask[i], miss_mask[i], W, None, Phi, rcond)
+                sum_E_zzT += E_zz
+                sum_E_yzT += E_yz
+                sum_E_yyT += E_yy
+        elif impute == 'approx':
             N_m = miss_mask.count_nonzero(axis=0).reshape((-1,1))
-            if Y_imp is None:
-                # Replace NA with zeros
-                Y = torch.nan_to_num(Y, 0)
-            else:
-                # Replace NA with imputed values from previous iteration
-                Y = torch.where(obs_mask, Y, Y_imp)
-
-    Q_inv_W = torch.linalg.lstsq(W @ W.T + Phi, W, rcond=rcond).solution
-    E_z = Y @ Q_inv_W # N x d
-    sum_E_zzT = N*torch.eye(d) - N*(W.T @ Q_inv_W) + E_z.T @ E_z
-    S22 = W @ W.T + Phi
-
-    if missing_Y and impute:
-        E_y = (W @ W.T) @ (torch.linalg.lstsq(S22, Y.T, rcond=rcond).solution)
-        E_y_mask = (E_y * miss_mask.T) + 0.0
-        Y_mask = (Y * obs_mask) + 0.0
-
-        E_yzT = N_m*(W - ((W @ W.T) @ Q_inv_W)) + (E_y_mask @ E_z)
-        E_yyT = N_m*(S22 - (W @ W.T) \
-                @ (torch.linalg.lstsq(S22, W @ W.T, rcond=rcond).solution)) \
-                + (E_y_mask @ E_y_mask.T)
-
-        sum_E_yzT = torch.zeros((p_all, d))
-        sum_E_yzT += Y_mask.T @ E_z
-        sum_E_yzT += E_yzT
-
-        sum_E_yyT = torch.zeros((p_all, p_all))
-        sum_E_yyT += Y_mask.T @ Y_mask
-        sum_E_yyT += E_yyT
+            N_o = (N - N_m).double()
+            Y = torch.where(obs_mask, Y, Y_imp)
+            S22 = W @ W.T + Phi
+            Q_inv_W = torch.linalg.lstsq(S22, W, rcond=rcond).solution
+            E_z = Q_inv_W.T @ Y.T
+            sum_E_zzT = N*torch.eye(d) - (N_o * Q_inv_W).T @ W + E_z @ E_z.T
+            E_y = ((W @ W.T) @ \
+                  torch.linalg.lstsq(S22, Y.T, rcond=rcond).solution).T
+            sum_E_yzT, _, sum_E_yyT = _approximate_impute(
+                Y, E_y, N_m, obs_mask, miss_mask, S22, Q_inv_W,
+                E_z, W, None, rcond)
+        else:
+            raise NotImplementedError(
+                'impute must be "none", "exact", or "approx".')
     else:
+        S22 = W @ W.T + Phi
+        Q_inv_W = torch.linalg.lstsq(S22, W, rcond=rcond).solution
+        E_z = Y @ Q_inv_W # N x d
+        sum_E_zzT = N*torch.eye(d) - N*(W.T @ Q_inv_W) + E_z.T @ E_z
         sum_E_yzT = Y.T @ E_z
         sum_E_yyT = Y.T @ Y
+        E_y = None
 
     W_next = torch.linalg.lstsq(sum_E_zzT, sum_E_yzT.T, rcond=rcond).solution.T
-    # Phi_next = Sigma - (Y.T @ E_z @ W_next.T)/N
     Phi_next = (sum_E_yyT - (W_next @ sum_E_yzT.T))/N
     psum = np.concatenate([[0], np.cumsum(p, 0)])
     for i_l, i_r in zip(psum[:-1], psum[1:]):
         Phi_next[i_l:i_r, i_r:] = 0
         Phi_next[i_r:, i_l:i_r] = 0
-    if missing_Y and impute:
-        # Replace NAs with imputed Y
-        # This will still be set to None in fit_EM_iter if imp_y==False
-        Y_next = torch.where(obs_mask, Y, E_y.T)
-    else:
-        Y_next = None
-    return W_next, Phi_next, Y_next
+    return W_next, Phi_next, E_y
 
 
 def _EM_step_full_stable(W: torch.Tensor, L: torch.Tensor, Phi: torch.Tensor,
-                         Y: torch.Tensor, Y_imp: None | torch.Tensor, p, k,
-                         device='cpu', rcond: float = 1e-08,
-                         impute: bool = False):
+                         Y: torch.Tensor, Y_imp: torch.Tensor, p: List[int],
+                         k: List[int], device='cpu', rcond: float = 1e-08,
+                         impute: str='none'):
     """One EM step for the full model.
 
     Args:
@@ -103,13 +172,13 @@ def _EM_step_full_stable(W: torch.Tensor, L: torch.Tensor, Phi: torch.Tensor,
       L: p_all by k_all=sum(k) block diagonal tensor. Current estimate of L.
       Phi: p_all by p_all tensor. Current estimate of Phi.
       Y: N by p_all torch tensor, the data.
-      Y_imp: N by p_all torch tensor or None. If not None, then represents
-        Y with imputed missing values filled in when impute=True.
+      Y_imp: N by p_all torch tensor. Represents Y with imputed missing values
+        filled in when impute=True.
       p: List of integers with the dimensionality of each dataset.
       k: List of integers with the private dimensionality of each dataset.
       device: 'cpu' or 'gpu'.
       rcond: Condition number for least squares.
-      impute: Whether to impute missing data. 
+      impute: Str, one of [none, exact, approx]. How to impute missing data. 
     Returns:
       Tuple W_next, L_next, Phi_next
     """
@@ -121,63 +190,66 @@ def _EM_step_full_stable(W: torch.Tensor, L: torch.Tensor, Phi: torch.Tensor,
     missing_Y = torch.isnan(Y).any()
 
     if missing_Y:
-        if not impute:
-            raise ValueError('Y contains missing values but impute is False')
-        else:
-            # Observed and missing components
-            obs_mask = ~torch.isnan(Y)
-            miss_mask = torch.isnan(Y)
-            # Number of samples missing per feature
+        obs_mask = ~torch.isnan(Y)
+        miss_mask = torch.isnan(Y)
+        if impute == 'none':
+            raise ValueError('Y contains missing values but impute is "none"')
+        elif impute == 'exact':
+            zz_sum = torch.zeros((d, d))
+            zx_sum = torch.zeros((d, k_all))
+            xx_sum = torch.zeros((k_all, k_all))
+            sum_E_yzT = torch.zeros((p_all, d))
+            sum_E_yxT = torch.zeros((p_all, k_all))
+            sum_E_yyT = torch.zeros((p_all, p_all))
+            for i in range(N):
+                y_i = Y[i].reshape(1,-1)
+                E_zz, E_zx, E_xx, E_yz, E_yx, E_yy = _exact_impute(y_i, p_all,
+                    d, k_all, obs_mask[i], miss_mask[i], W, L, Phi, rcond)
+                zz_sum += E_zz
+                zx_sum += E_zx
+                xx_sum += E_xx
+                sum_E_yzT += E_yz
+                sum_E_yxT += E_yx
+                sum_E_yyT += E_yy
+            E_y = None
+        elif impute == 'approx':
             N_m = miss_mask.count_nonzero(axis=0).reshape((-1,1))
-            if Y_imp is None:
-                # Replace NA with zeros
-                Y = torch.nan_to_num(Y, 0)
-            else:
-                # Replace NA with imputed values from previous iteration
-                Y = torch.where(obs_mask, Y, Y_imp)
-
-    S21 = torch.cat([W, L], axis=1).to(device)
-    S22 = W @ W.T + L @ L.T + Phi
-    S22inv_S21 = torch.linalg.lstsq(S22, S21, rcond=rcond).solution
-    # TODO(brielin): transpose the next line.
-    E_z_x = S22inv_S21.T @ Y.T
-    mom_zx_zxT_sum = (N * torch.eye(k_all + d).to(device) - \
-                      (N * S22inv_S21.T @ S21).to(device) + \
-                      E_z_x @ E_z_x.T).to(device)
-    zz_sum = mom_zx_zxT_sum[:d, :d].to(device)
-    zx_sum = mom_zx_zxT_sum[:d, d:].to(device)
-    xx_sum = mom_zx_zxT_sum[d:, d:].to(device)
-
-    if impute and missing_Y:
-        E_y = (W @ W.T) \
-            @ (torch.linalg.lstsq(S22, Y.T, rcond=rcond).solution)
-        E_y_mask = (E_y * miss_mask.T) + 0.0
-        Y_mask = (Y * obs_mask) + 0.0
-
-        # Make this only over missing samples (sum over N_m)
-        E_yzT = N_m*(W - (W @ W.T) @ S22inv_S21[:, :d]) \
-            + (E_y_mask @ E_z_x[:d, :].T)
-        E_yxT = N_m*(L - (W @ W.T) @ S22inv_S21[:, d:]) \
-            + (E_y_mask @ E_z_x[d:, :].T)
-        E_yyT = N_m*(S22 - (W @ W.T) \
-            @ (torch.linalg.lstsq(S22, W @ W.T, rcond=rcond).solution)) \
-            + (E_y_mask @ E_y_mask.T)
-
-        sum_E_yzT = torch.zeros((p_all, d))
-        sum_E_yzT += Y_mask.T @ E_z_x[:d, :].T
-        sum_E_yzT += E_yzT
-
-        sum_E_yxT = torch.zeros((p_all, k_all))
-        sum_E_yxT += Y_mask.T @ E_z_x[d:, :].T
-        sum_E_yxT += E_yxT
-
-        sum_E_yyT = torch.zeros((p_all, p_all))
-        sum_E_yyT += Y_mask.T @ Y_mask
-        sum_E_yyT += E_yyT
+            N_o = (N - N_m).float()
+            Y = torch.where(obs_mask, Y, Y_imp) # Replace NA with imputed values
+            S21 = torch.cat([W, L], axis=1).to(device)
+            S22 = W @ W.T + L @ L.T + Phi
+            S22inv_S21 = torch.linalg.lstsq(S22, S21, rcond=rcond).solution
+            E_z_x = S22inv_S21.T @ Y.T
+            mom_zx_zxT_sum = (N * torch.eye(k_all + d).to(device) - \
+                            ((N_o * S22inv_S21).T @ S21).to(device) + \
+                            E_z_x @ E_z_x.T).to(device)
+            zz_sum = mom_zx_zxT_sum[:d, :d].to(device)
+            zx_sum = mom_zx_zxT_sum[:d, d:].to(device)
+            xx_sum = mom_zx_zxT_sum[d:, d:].to(device)
+            E_y = ((W @ W.T) @ \
+                  torch.linalg.lstsq(S22, Y.T,rcond=rcond).solution).T
+            sum_E_yzT, sum_E_yxT, sum_E_yyT = _approximate_impute(
+                Y, E_y, N_m, obs_mask, miss_mask, S22,
+                S22inv_S21, E_z_x, W, L, rcond)
+        else:
+            raise NotImplementedError(
+                'impute must be "none", "exact", or "approx".')
     else:
+        S21 = torch.cat([W, L], axis=1).to(device)
+        S22 = W @ W.T + L @ L.T + Phi
+        S22inv_S21 = torch.linalg.lstsq(S22, S21, rcond=rcond).solution
+        # TODO(brielin): transpose the next line.
+        E_z_x = S22inv_S21.T @ Y.T
+        mom_zx_zxT_sum = (N * torch.eye(k_all + d).to(device) - \
+                        (N * S22inv_S21.T @ S21).to(device) + \
+                        E_z_x @ E_z_x.T).to(device)
+        zz_sum = mom_zx_zxT_sum[:d, :d].to(device)
+        zx_sum = mom_zx_zxT_sum[:d, d:].to(device)
+        xx_sum = mom_zx_zxT_sum[d:, d:].to(device)
         sum_E_yzT = Y.T @ E_z_x[:d, :].T
         sum_E_yxT = Y.T @ E_z_x[d:, :].T
         sum_E_yyT = Y.T @ Y
+        E_y = None
 
     W_next = torch.linalg.lstsq(zz_sum, (sum_E_yzT - L @ zx_sum.T).T,
                                 rcond=rcond).solution.T
@@ -193,13 +265,7 @@ def _EM_step_full_stable(W: torch.Tensor, L: torch.Tensor, Phi: torch.Tensor,
         2 * sum_E_yzT @ W_next.T - \
         2 * sum_E_yxT @ L_next.T
     Phi_next = torch.diag(torch.diagonal(Phi_next / N)).to(device)
-    if missing_Y and impute:
-        # Replace NAs with imputed Y
-        # This will still be set to None in fit_EM_iter if imp_y==False
-        Y_next = torch.where(obs_mask, Y, E_y.T)
-    else:
-        Y_next = None
-    return W_next, L_next, Phi_next, Y_next
+    return W_next, L_next, Phi_next, E_y
 
 
 def _get_latent_worker(W: torch.Tensor, L: torch.Tensor, Phi: torch.Tensor,
@@ -271,10 +337,21 @@ def get_latent(W: List[torch.Tensor], L: List[torch.Tensor],
                                 for i, j in zip(ksum[:-1], ksum[1:])]
     return Z, X
 
-
-def _loglik(Sigma: torch.Tensor, Sigma_hat: torch.Tensor, n: int) -> float:
-    p = Sigma.shape[0]
-    l = (n/2)*(p*np.log(2*np.pi) +
+def _loglik(Sigma: torch.Tensor, Sigma_hat: torch.Tensor, Y: torch.Tensor,
+            n: int, obs_mask: torch.Tensor, ll_exact: bool = False) -> float:
+    if ll_exact:
+        l = 0.0
+        for i in range(n):
+            obs_idx = torch.where(obs_mask[i,:])[0]
+            Sigma_o = Sigma[obs_idx][:, obs_idx]
+            p_oi = torch.count_nonzero(obs_mask[i,:]).item()
+            y_oi = Y[i, obs_idx].reshape(1,-1)
+            Sigma_hat_i = y_oi.T @ y_oi
+            l += (1/2) * (p_oi*np.log(2*np.pi) + torch.logdet(Sigma_o) +
+               torch.trace(torch.linalg.lstsq(Sigma_o, Sigma_hat_i).solution))
+    else:
+        p = Sigma.shape[0]
+        l = (n/2)*(p*np.log(2*np.pi) +
                torch.logdet(Sigma) +
                torch.trace(torch.linalg.lstsq(Sigma, Sigma_hat).solution))
     return l
@@ -282,7 +359,7 @@ def _loglik(Sigma: torch.Tensor, Sigma_hat: torch.Tensor, n: int) -> float:
 
 def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
                  rcond = 1e-08, delta = 1e-6, verbose = False,
-                 impute: bool = False, imp_y: bool = False):
+                 impute = 'none', ll_exact = False):
     """Iteratively fit EM.
 
     Args:
@@ -295,8 +372,8 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
        rcond: Tolerance for leastsquares.
        delta: Break when change in likelihood < delta.
        verbose: True to print progress.
-       impute: Whether to impute missing data. 
-       imp_y: Whether to impute using estimated Y each iteration.
+       impute: Str, one of [none, exact, approx]. How to impute missing data.
+       ll_exact: True to compute log-likelihood exactly when missing modes.
     Returns:
        W: p_all=sum(p) by d tensor. New estimate of W.
        L: p_all by k_all=sum(k) block diagonal tensor. New estimate of L.
@@ -316,14 +393,15 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
 
     N = Y.shape[0]
     Sigma = W @ W.T + Phi if L is None else W @ W.T + L @ L.T + Phi
-    l = [_loglik(Sigma, Sigma_hat, N).tolist()]
+    obs_mask = ~torch.isnan(Y)
+    l = [_loglik(Sigma, Sigma_hat, Y, N, obs_mask, ll_exact).tolist()]
     denom = 1 # torch.mean(Sigma_hat**2)
     cd = [torch.mean((Sigma - Sigma_hat)**2/denom).tolist()]
 
     L_it = None
     t0 = time.time()
     if verbose: print('iter:', 0, 'Likelihood:', l[0])
-    Y_it = None # Initialize placeholder for imputed Y values
+    Y_it = torch.where(torch.isnan(Y), 0, Y) # Initialize imputed Y
     for it in range(maxit):
         if L is None:
             W_it, Phi_it, Y_it = _EM_step_no_private_stable(
@@ -333,9 +411,7 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
             W_it, L_it, Phi_it, Y_it = _EM_step_full_stable(
                 W, L, Phi, Y, Y_it, p, k, device, rcond, impute)
             Sigma_it = W_it @ W_it.T + L_it @ L_it.T + Phi_it
-        if not imp_y:
-            Y_it = None # Do not use imputed Y for model imputation
-        l_it = _loglik(Sigma_it, Sigma_hat, N).tolist()
+        l_it = _loglik(Sigma_it, Sigma_hat, Y, N, obs_mask, ll_exact).tolist()
         cd_it = torch.mean((Sigma_it - Sigma_hat)**2/denom).tolist()
         l_delta_it = (l[it] - l_it)/l_it
         cd_delta_it = cd[it] - cd_it
@@ -347,7 +423,7 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
         if verbose: print('Iter:', it+1, 'Likelihood:', l_it,
                     'Percent change:', l_delta_it, 'Time (s):', time.time()-t0)
         if delta is not None:
-            if l_delta_it < delta: break
+            if it > 5 and l_delta_it < delta: break
     W = [W[i:j, :] for i, j in zip(psum[:-1], psum[1:])]
     L = None if L is None else [
         L[i:j, l:m] for i, j, l, m in zip(
