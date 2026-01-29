@@ -7,6 +7,7 @@ from typing import Dict, List, Union
 import math
 import random
 import torch
+import pandas as pd
 
 type Params = Dict[str, Union[List[int], int]]
 
@@ -182,9 +183,13 @@ def simulate_data(sim_params : Params, private_var : bool = True):
     if not all(par in sim_params.keys() for par in ['d','k','n','p','sigsq']):
         raise ValueError('Parameters must include all of d, k, n, p, sigsq.')
 
-    if len(sim_params['k']) != len(sim_params['p']) \
-       or len(sim_params['k']) != len(sim_params['sigsq']):
-        raise ValueError('Params k, p, and sigsq must all be the same length.')
+    if private_var:
+        if len(sim_params['k']) != len(sim_params['p']) \
+        or len(sim_params['k']) != len(sim_params['sigsq']):
+            raise ValueError('Params k, p, sigsq must all be the same length.')
+    else:
+        if len(sim_params['p']) != len(sim_params['sigsq']):
+            raise ValueError('Params p and sigsq must be the same length.')
 
     if any(sim_params['p'][i] < sim_params['k'][i] + sim_params['d']
         for i in range(len(sim_params['k']))
@@ -213,9 +218,15 @@ def simulate_data(sim_params : Params, private_var : bool = True):
         Y = [torch.matmul(W[i], Z)
              + E[i] for i in range(len(W))]
 
+    Y_dict = {}
+    for i in range(len(Y)):
+        Y_dict[f"mode{i}"] = pd.DataFrame(
+            Y[i].T, columns=[f"feature{f}" for f in range(Y[i].shape[0])], 
+            index=[f"sample{s}" for s in range(Y[i].shape[1])]
+        )
     # Generate stacked Y data for input to EM step
-    Y_stack = torch.cat(Y, dim=0)
-    return Y_stack, W, L, Phi
+    Y_tensor = torch.cat(Y, dim=0)
+    return Y_dict, Y_tensor, W, L, Phi
 
 
 def initialize_params(W : List[torch.tensor], L : List[torch.tensor],
