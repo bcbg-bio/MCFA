@@ -296,7 +296,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         if missing_modes == 'raise':
             raise ValueError('Missing modes detected for some samples.')
         elif missing_modes == 'drop':
-            print('Missing modes detected for some samples, dropping samples'
+            print('Missing modes detected for some samples, dropping samples '
                   'with missing modes. There are {0:d} samples remaining.'.format(N_common))
             Y = [Y_m.loc[common_samples] for Y_m in Y]
             if N_common <= 1:
