@@ -120,6 +120,7 @@ def _EM_step_no_private_stable(
             sum_E_zzT = torch.zeros((d, d))
             sum_E_yzT = torch.zeros((p_all, d))
             sum_E_yyT = torch.zeros((p_all, p_all))
+            E_y = None
             for i in range(N):
                 y_i = Y[i].reshape(1,-1)
                 E_zz, _, _, E_yz, _, E_yy = _exact_impute(y_i, p_all, d,
