@@ -291,7 +291,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         common_samples = common_samples.intersection(names)
         all_samples = all_samples.union(names)
     N_common = len(common_samples)
-    impute_option = 'none'
+    impute_option = None
     if any(Y_m.shape[0] > N_common for Y_m in Y):
         if missing_modes == 'raise':
             raise ValueError('Missing modes detected for some samples.')

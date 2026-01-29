@@ -90,7 +90,7 @@ def _exact_impute(y_i: torch.Tensor, p_all: int, d: int, k_all: int,
 def _EM_step_no_private_stable(
         W: torch.Tensor, Phi: torch.Tensor, Y: torch.Tensor,
         Y_imp: torch.Tensor, p: List[int], device = 'cpu',
-        rcond: float = 1e-08, impute: str = 'none'):
+        rcond: float = 1e-08, impute = None):
     """One EM step when there is no private structure.
 
     Args:
@@ -114,8 +114,8 @@ def _EM_step_no_private_stable(
     if missing_Y:
         obs_mask = ~torch.isnan(Y)
         miss_mask = torch.isnan(Y)
-        if impute == 'none':
-            raise ValueError('Y contains missing values but impute is "none"')
+        if impute is None:
+            raise ValueError('Y contains missing values but impute is None')
         elif impute == 'exact':
             sum_E_zzT = torch.zeros((d, d))
             sum_E_yzT = torch.zeros((p_all, d))
@@ -142,7 +142,7 @@ def _EM_step_no_private_stable(
                 E_z, W, None, rcond)
         else:
             raise NotImplementedError(
-                'impute must be "none", "exact", or "approx".')
+                'impute must be None, "exact", or "approx".')
     else:
         S22 = W @ W.T + Phi
         Q_inv_W = torch.linalg.lstsq(S22, W, rcond=rcond).solution
@@ -164,7 +164,7 @@ def _EM_step_no_private_stable(
 def _EM_step_full_stable(W: torch.Tensor, L: torch.Tensor, Phi: torch.Tensor,
                          Y: torch.Tensor, Y_imp: torch.Tensor, p: List[int],
                          k: List[int], device='cpu', rcond: float = 1e-08,
-                         impute: str='none'):
+                         impute = None):
     """One EM step for the full model.
 
     Args:
@@ -178,7 +178,7 @@ def _EM_step_full_stable(W: torch.Tensor, L: torch.Tensor, Phi: torch.Tensor,
       k: List of integers with the private dimensionality of each dataset.
       device: 'cpu' or 'gpu'.
       rcond: Condition number for least squares.
-      impute: Str, one of [none, exact, approx]. How to impute missing data. 
+      impute: None or Str, one of [exact, approx]. How to impute missing data. 
     Returns:
       Tuple W_next, L_next, Phi_next
     """
@@ -192,8 +192,8 @@ def _EM_step_full_stable(W: torch.Tensor, L: torch.Tensor, Phi: torch.Tensor,
     if missing_Y:
         obs_mask = ~torch.isnan(Y)
         miss_mask = torch.isnan(Y)
-        if impute == 'none':
-            raise ValueError('Y contains missing values but impute is "none"')
+        if impute is None:
+            raise ValueError('Y contains missing values but impute is None')
         elif impute == 'exact':
             zz_sum = torch.zeros((d, d))
             zx_sum = torch.zeros((d, k_all))
@@ -233,7 +233,7 @@ def _EM_step_full_stable(W: torch.Tensor, L: torch.Tensor, Phi: torch.Tensor,
                 S22inv_S21, E_z_x, W, L, rcond)
         else:
             raise NotImplementedError(
-                'impute must be "none", "exact", or "approx".')
+                'impute must be None, "exact", or "approx".')
     else:
         S21 = torch.cat([W, L], axis=1).to(device)
         S22 = W @ W.T + L @ L.T + Phi
@@ -359,7 +359,7 @@ def _loglik(Sigma: torch.Tensor, Sigma_hat: torch.Tensor, Y: torch.Tensor,
 
 def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
                  rcond = 1e-08, delta = 1e-6, verbose = False,
-                 impute = 'none', ll_exact = False):
+                 impute = None, ll_exact = False):
     """Iteratively fit EM.
 
     Args:
@@ -372,7 +372,7 @@ def fit_EM_iter(Y, Sigma_hat, W, L, Phi, maxit = 1000, device = 'cpu',
        rcond: Tolerance for leastsquares.
        delta: Break when change in likelihood < delta.
        verbose: True to print progress.
-       impute: Str, one of [none, exact, approx]. How to impute missing data.
+       impute: None or Str, one of [exact, approx]. How to impute missing data.
        ll_exact: True to compute log-likelihood exactly when missing modes.
     Returns:
        W: p_all=sum(p) by d tensor. New estimate of W.
