@@ -1,13 +1,13 @@
 # pylint: disable=invalid-name
 """PCA routines for MCFA model.
 
-Do not call directly, see mcfa.py for usage.
+Do not call directly, see mcfa_model.py for usage.
 """
 
 import numpy as np
 import pandas as pd
 import torch
-from dataclasses import dataclass
+from dataclasses import dataclass, astuple
 from sklearn import preprocessing
 
 
@@ -35,7 +35,7 @@ def _ppca_missing(X: torch.Tensor, k: int = 'infer') -> PCARes:
         A PCARes instance.
     """
     raise NotImplementedError('TBD.')
-    
+
 
 def _pca(X: torch.Tensor, k: int = 'infer', calc_V = True) -> PCARes:
     """Basic PCA implementation.
@@ -87,7 +87,7 @@ def _pca(X: torch.Tensor, k: int = 'infer', calc_V = True) -> PCARes:
         V = V if calc_V else torch.eye(k, dtype=torch.double)
     var_exp = S_k**2 / torch.sum(S**2)
 
-    return U, V, S_k, var_exp, k, N, D, mp_dim
+    return PCARes(None, var_exp, U, S_k, V, k, N, D, mp_dim)
 
 
 def pca(X: pd.DataFrame, k: int = 'infer', center: bool = True,
@@ -105,8 +105,9 @@ def pca(X: pd.DataFrame, k: int = 'infer', center: bool = True,
         scale: bool. True to variance-scale the columns of X to 1.0.
         calc_V: True to track the PC loadings (right singular vectors)
           of X. Setting to False can save substantial memory if X is very
-          wide. Ignored if missing=='impute'.
-        missing: String, one of 'raise', 'ignore' or 'impute'
+          wide. Ignored if missing=='impute_model'.
+        missing: String, one of 'raise', 'drop', 'impute_mean', 'ignore' or 
+          'impute_model'
     Returns:
         A PCARes instance.
     """
@@ -115,9 +116,9 @@ def pca(X: pd.DataFrame, k: int = 'infer', center: bool = True,
     all_samples = X.index
     drop_index = np.asarray(pd.isna(X).all(axis=1)).nonzero()[0]
     if len(drop_index) > 0:
-        X.drop(X.index[drop_index], inplace=True)
+        X = X.drop(X.index[drop_index])
 
-    if (missing == 'raise') & any(pd.isna(X)):
+    if (missing == 'raise') & pd.isna(X).any(axis = None):
         raise ValueError('Missing data not expected in PCA input.')
 
     if center | scale:
@@ -127,25 +128,32 @@ def pca(X: pd.DataFrame, k: int = 'infer', center: bool = True,
         X = torch.from_numpy(X.values)
 
     pcares = None
-    if missing == 'ignore':
-        U, V, S_k, var_exp, k, N, D, mp_dim = _pca(X, k, calc_V)
-    elif missing == 'impute':
-        U, V, S_k, var_exp, k, N, D, mp_dim = _ppca_missing(X, k)
+    if missing == 'impute_model':
+        pcares = _ppca_missing(X, k)
+    else:
+        pcares = _pca(X, k, calc_V)
+    _, var_exp, U, S_k, V, k, N, D, mp_dim = astuple(pcares)
 
+    # Do this first to avoid propagating NA values in U.
+    pc_names = ['PC' + str(i+1) for i in range(k)]
+    pcs = U * S_k * np.sqrt(N)
+
+    # Add missing rows back in.
     if len(drop_index) > 0:
         for i in drop_index:
             new_row = torch.empty((1, k))
             new_row[:,:] = float('nan')
-            if drop_index == 0:
+            if i == 0:
+                pcs = torch.cat((new_row, pcs), 0)
                 U = torch.cat((new_row, U), 0)
-            elif drop_index < len(pcares.U):
+            elif i < len(U):
+                pcs = torch.cat((pcs[0:i,:], new_row, pcs[i:,:]), 0)
                 U = torch.cat((U[0:i,:], new_row, U[i:,:]), 0)
             else:
+                pcs = torch.cat((pcs, new_row), 0)
                 U = torch.cat((U, new_row), 0)
 
-    pc_names = ['PC' + str(i+1) for i in range(k)]
-    pcs = pd.DataFrame((U * S_k * np.sqrt(N)).numpy(), index=all_samples,
-                       columns=pc_names)
+    pcs = pd.DataFrame(pcs.numpy(), index=all_samples, columns=pc_names)
     var_exp = pd.Series(var_exp, index=pc_names)
 
     return PCARes(pcs, var_exp, U, S_k, V, k, N, D, mp_dim)

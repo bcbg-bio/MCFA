@@ -1,10 +1,13 @@
 # pylint: disable=invalid-name
 """Initializers for MCFA model.
 
-Do not call directly, see mcfa.py for usage.
+Do not call directly, see mcfa_model.py for usage.
 """
 
 import torch
+import numpy as np
+import pandas as pd
+from multicor_fa import _pca
 from typing import List
 
 def _ppca(X, d):
@@ -23,7 +26,7 @@ def _ppca(X, d):
 
 
 # TODO(brielin): Double check that
-def _init_var_W(Y_pcs, psum, d, informative):
+def init_var_W(Y_pcs, psum, d, informative):
     """Initializes W using sumcor with avgvar constraint.
 
     Args:
@@ -34,7 +37,11 @@ def _init_var_W(Y_pcs, psum, d, informative):
         to original data space.
     """
     U_all = torch.cat([pc.U for pc in Y_pcs], dim = 1)
-    UTU = U_all.T @ U_all
+    if torch.any(torch.isnan(U_all), dim=1).any():
+        U_nonzero = torch.nan_to_num(U_all, nan=0.0)
+        UTU = U_nonzero.T @ U_nonzero
+    else:
+        UTU = U_all.T @ U_all
 
     W, _, vals = _ppca(UTU, d)
     W = [(W[i:j, :].T * pc.S).T for i, j, pc in zip(psum[:-1], psum[1:], Y_pcs)]
@@ -42,7 +49,7 @@ def _init_var_W(Y_pcs, psum, d, informative):
     return W, vals
 
 
-def _init_norm_W(Sigma_hat, psum, d, M):
+def init_norm_W(Sigma_hat, psum, d, M):
     """Initializes W using sumcor with avgnorm constraint.
 
     Args:
@@ -56,13 +63,13 @@ def _init_norm_W(Sigma_hat, psum, d, M):
     return W, rho
 
 
-def _init_L_Phi(Sigma_hat, W, psum, p, k):
+def init_L_Phi(Sigma_hat, W, psum, p, k):
     """Initializes L and Phi for a given W, Sigma_hat.
 
     Args:
       Sigma_hat: Cross correlation matrix to model.
       W: LIST
-      psum: List of break indices for inidivudal datasets.
+      psum: List of break indices for individual datasets.
       p: List of integers, dimensions of datasets.
       k: List of integers or None, dimensions of private spaces.
     """
@@ -70,14 +77,14 @@ def _init_L_Phi(Sigma_hat, W, psum, p, k):
            for W_m, i, j in zip(W, psum[:-1], psum[1:])]
 
     L = None
-    if k is not None:
+    if k is not None and all(k_m > 0 for k_m in k):
         resid_pcas = [_ppca(Phi_m, k_m) for k_m, Phi_m in zip(k, Phi)]
         L, s2s, _ = list(map(list, zip(*resid_pcas)))
         Phi = [torch.diag(torch.tensor([s2]*p_m)) for s2, p_m in zip(s2s, p)]
     return L, Phi
 
 
-def _rho_mp_sim(N: int, p: List[int], nsims=100, device='cpu'):
+def rho_mp_sim(N: int, p: List[int], nsims=100, device='cpu'):
     """Calculates the MCCA (Parra) solution to random data.
 
     Args:
@@ -89,7 +96,7 @@ def _rho_mp_sim(N: int, p: List[int], nsims=100, device='cpu'):
     sim_res = []
     for _ in range(nsims):
         Y = [pd.DataFrame(np.random.normal(size=(N, p_m))) for p_m in p]
-        Y_pcs = [pca(Y_m, 'all') for Y_m in Y]
+        Y_pcs = [_pca.pca(Y_m, 'all') for Y_m in Y]
         U_all = torch.cat([pc.U for pc in Y_pcs], dim = 1)
         UTU = U_all.T @ U_all
         rho = torch.linalg.eigvalsh(UTU)

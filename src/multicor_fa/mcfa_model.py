@@ -59,9 +59,9 @@ def score(data, Z, transform = True):
     Args:
       data: A pandas DataFrame with features as columns. The original data.
       Z: The factor set used to calculate gene statistics. Usually mcfa_res.Z.
-      transform: bool. True to transform correlations to Z-scores.
+      transform: Bool. True to transform correlations to Z-scores.
     Returns:
-      A pd.DataFrame with rows as data features and columns as factors, entires
+      A pd.DataFrame with rows as data features and columns as factors, entries
       are (optionally Z-transformed) correlations.
     """
     n = Z.shape[0]
@@ -75,7 +75,7 @@ def score(data, Z, transform = True):
 
 
 def cv(Y: Iterable[pd.DataFrame], mcfa_res: MCFARes,
-       folds: Union[str, int] = 10, threads: [int] = 1,
+       folds: Union[str, int] = 10, threads: int = 1,
        verbose: bool = False):
     """Checks for over-fitting using k-fold cross validation.
 
@@ -114,7 +114,7 @@ def cv(Y: Iterable[pd.DataFrame], mcfa_res: MCFARes,
         #     pool.join()
     else:
         for indices in enumerate(cv_iter.split(mcfa_res.Z)):
-            results.append(_cv_one_iter(
+            results.append(_cv.cv_one_iter(
                 indices, Y, mcfa_res.Z, mcfa_res.X, mcfa_res.n_pcs,
                 mcfa_res.d, mcfa_res.k, mcfa_res.center,
                 mcfa_res.scale, mcfa_res.init, mcfa_res.maxit, mcfa_res.delta,
@@ -163,7 +163,8 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         missing_entries: str = 'raise', missing_modes: str = 'raise',
         center: bool = True, scale: bool = True, init: str = 'avgvar',
         result_space: str = 'full', maxit: int = 1000, delta: float = 1e-6,
-        device = 'cpu', rcond: float = 1e-8, verbose: bool = True):
+        device = 'cpu', rcond: float = 1e-8, verbose: bool = True,
+        ll_exact: bool = False):
     """Interface function to the MCFA estimators.
 
     Args:
@@ -183,17 +184,20 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         k: 'infer', None, or list of integers. Number of private components
           to model per dataset. If 'infer', k is set to n_pcs - d. If None,
           no private components will be modeled.
-        missing_entries: Either 'raise', 'drop', 'skip', 'impute_model', or 'impute_mean'.
+        missing_entries: Either 'raise', 'drop', 'ignore', 'impute_model', or 'impute_mean'.
           Instructions for what to do with missing entries of observed samples
-          in each mode. 'raise' will raise an error, 'skip' will ignore these
+          in each mode. 'raise' will raise an error, 'ignore' will ignore these
           terms in the likelihood, 'impute_model' will impute them using
           ppca, 'impute_mean' will impute them with the mean of other samples.
-        missing_modes: Either 'raise', 'drop', 'skip', 'impute_model', or 'impute_mean'.
-          Instructions for what to do with unobserved data modes in some samples.
-          'raise' will raise an error if any are detected. 'skip' will ignore
-          these samples in the likelihood. 'impute_model' will impute them using
-          the model. 'impute_mean' will impute them using the mean of other
-          observations.
+        missing_modes: Either 'raise', 'drop', 'ignore', 'impute_mean', 
+        'impute_model_exact', or 'impute_model_approx'.
+          Instructions for what to do with unobserved data modes in some
+          samples. 'raise' will raise an error if any are detected. 'ignore'
+          will ignore these samples in the likelihood. 'impute_mean' will
+          impute them using the mean of other observations. 'impute_model_exact'
+          will impute them using the model via exact EM implemented with a
+          for loop. 'impute_model_approx' will impute them using the model via 
+          a faster approximation of EM. 
         init: Either 'avgvar', 'avgnorm' or 'random'. Initialization
           strategy. 'avgvar' (default) maximizes the sum of correlations
           with a global mahalalanobis constraint (eg Parra 2019), 'avgnorm'
@@ -212,10 +216,12 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
           to run none and return only the initial solution.
         delta: Float, convergance tolerance for EM. Set to None to run for
           maxit iterations.
+        device: 'cpu' or 'gpu'. How to run the MCFA model. 
         rcond: Float, zero tolerance for least squares routines.
         verbose: Bool. True to print progress.
+        ll_exact: Bool. True to compute exact EM log-likelihood when missing modes.
     Returns:
-        an MCFARes instance.
+        An MCFARes instance.
     Raises:
         NotImplementedError: if a TODO feature is called.
         ValueError: if the input data matrices have a different number
@@ -242,28 +248,28 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
             'n_pcs must be "infer", "all" or a list of integers.')
 
     if isinstance(missing_entries, str) & \
-    (missing_entries not in ['raise', 'drop', 'skip', 'impute_model', 'impute_mean']):
+    (missing_entries not in ['raise', 'drop', 'ignore', 'impute_model', 'impute_mean']):
         raise NotImplementedError(
-            'missing_entries must be "raise", "drop", "skip",'\
+            'missing_entries must be "raise", "drop", "ignore",'\
             ' "impute_model" or "impute_mean".')
 
     if isinstance(missing_modes, str) & \
-    (missing_modes not in ['raise', 'drop', 'skip', 'impute_model', 'impute_mean']):
+    (missing_modes not in ['raise', 'drop', 'ignore', 'impute_mean', 'impute_model_exact', 'impute_model_approx']):
         raise NotImplementedError(
             'missing_modes must be "raise", "drop",'\
-            '"skip", "impute_model" or "impute_mean".')
+            ' "ignore", "impute_mean", "impute_model_exact",'\
+            ' or "impute_model_approx.')
 
-    # Drop rows which are entirely NA to conform to expectations below
-    Y = [Y_m.drop(Y_m.index[pd.isna(Y_m).all(axis=1)]) for Y_m in Y]
-    
     ds_names = None
     if isinstance(Y, dict):
         ds_names = Y.keys()
         Y = list(Y.values())
+    # Drop rows which are entirely NA to conform to expectations below
+    Y = [Y_m.drop(Y_m.index[pd.isna(Y_m).all(axis=1)]) for Y_m in Y]
     sample_names = [Y_m.index for Y_m in Y]
     feature_names = [Y_m.columns for Y_m in Y]
 
-    if any(any(pd.isna(Y_m)) for Y_m in Y):
+    if any(Y_m.isna().any(axis = None) for Y_m in Y):
         if missing_entries == 'raise':
             raise ValueError('Missing entries detected in some datasets')
         elif missing_entries == 'drop':
@@ -272,8 +278,8 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         elif missing_entries == 'impute_mean':
             print('Missing values detected in input, imputing with mean.')
             [Y_m.fillna(Y_m.mean(), inplace=True) for Y_m in Y]
-        elif missing_entries == 'skip':
-            print('Missing values detected in input, they will be skipped.')
+        elif missing_entries == 'ignore':
+            print('Missing values detected in input, they will be ignored.')
         elif missing_entries == 'impute_model':
             print('Missing values detected in input, they will be imputed during'
                   'model fitting.')
@@ -285,11 +291,12 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
         common_samples = common_samples.intersection(names)
         all_samples = all_samples.union(names)
     N_common = len(common_samples)
+    impute_option = None
     if any(Y_m.shape[0] > N_common for Y_m in Y):
         if missing_modes == 'raise':
             raise ValueError('Missing modes detected for some samples.')
         elif missing_modes == 'drop':
-            print('Missing modes detected for some samples, dropping samples'
+            print('Missing modes detected for some samples, dropping samples '
                   'with missing modes. There are {0:d} samples remaining.'.format(N_common))
             Y = [Y_m.loc[common_samples] for Y_m in Y]
             if N_common <= 1:
@@ -297,20 +304,33 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
             use_samples = common_samples
         elif missing_modes == 'impute_mean':
             print('Missing modes detected for some samples, Imputing with the mean')
-            Y = [pd.concat([Y_m, pd.DataFrame(index=all_samples.difference(Y_m.index),
-                                              columns=Y_m.columns)]).fillna(Y_m.mean()) for Y_m in Y]
+            Y = [pd.concat([Y_m, pd.DataFrame(
+                    index=all_samples.difference(Y_m.index),
+                    columns=Y_m.columns
+                )]).fillna(Y_m.mean()) for Y_m in Y]
             use_samples = all_samples
-        elif missing_entries == 'skip':
-            print('Missing values detected in input, they will be skipped.')
-            Y = [pd.concat([Y_m, pd.DataFrame(index=all_samples.difference(Y_m.index),
-                                              columns=Y_m.columns)]) for Y_m in Y]
+        elif missing_modes == 'ignore':
+            raise NotImplementedError
+        elif missing_modes == 'impute_model_exact':
+            print('Missing modes detected in input, they will be imputed during'
+                  ' model fitting using exact EM.')
+            Y = [pd.concat([Y_m, pd.DataFrame(
+                    index=all_samples.difference(Y_m.index),
+                    columns=Y_m.columns
+                )]) for Y_m in Y]
             use_samples = all_samples
-        elif missing_entries == 'impute_model':
-            print('Missing values detected in input, they will be imputed during'
-                  'model fitting.')
-            Y = [pd.concat([Y_m, pd.DataFrame(index=all_samples.difference(Y_m.index),
-                                              columns=Y_m.columns)]) for Y_m in Y]
+            impute_option = 'exact'
+        elif missing_modes == 'impute_model_approx':
+            print('Missing modes detected in input, they will be imputed during'
+                  ' model fitting using approximate EM.')
+            Y = [pd.concat([Y_m, pd.DataFrame(
+                    index=all_samples.difference(Y_m.index),
+                    columns=Y_m.columns
+                )]) for Y_m in Y]
             use_samples = all_samples
+            impute_option = 'approx'
+    else:
+        use_samples = all_samples
 
     # Rearrange to match index
     Y = [Y_m.loc[use_samples] for Y_m in Y]
@@ -338,7 +358,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
 
     if verbose: print('Calculating data PCs.')
 
-    Y_pcs = [_pca.pca(Y_m, n_pc_m, center, scale)
+    Y_pcs = [_pca.pca(Y_m, n_pc_m, center, scale, missing=missing_entries)
              for Y_m, n_pc_m in zip(Y, n_pcs)]
     if informative and result_space == 'pc':
         feature_names = [['pc_' + str(k+1) for k in range(Y_pc.k)]
@@ -361,8 +381,7 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
             Y_all = torch.cat([torch.from_numpy(Y_m.values) for Y_m in Y],
                               axis=1)
     if verbose: print('Calculating empirical covariance.')
-    mask = ~torch.isnan(Y_all)
-    N = mask.type(torch.int64).T @ mask.type(torch.int64)
+    N = len(use_samples)
     Sigma_hat = Y_all.nan_to_num().T @ Y_all.nan_to_num() / N
     psum = np.concatenate([[0], np.cumsum(p, 0)])
     p_all = sum(p)
@@ -370,14 +389,18 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
     # TODO(brielin): This is doing a little extra work/memory if d == 'infer'
     #   and init = 'avgvar' (the default). Also note that _init_ methods may
     #   no longer need to return rho and ppca may no longer need to return vals.
-    if verbose: print('Initialzing model.')
+    if verbose: print('Initializing model.')
     if d == 'all':
         d = p_all
     elif d == 'infer':
         if verbose: print('Inferring the shared dimensionality.')
-        rho_min, _ = _rho_mp_sim(N, p)
+        rho_min, _ = _initializers.rho_mp_sim(N, p)
         U_all = torch.cat([pc.U for pc in Y_pcs], dim = 1)
-        UTU = U_all.T @ U_all
+        if torch.any(torch.isnan(U_all), dim=1).any():
+            U_nonzero = torch.nan_to_num(U_all, nan=0.0)
+            UTU = U_nonzero.T @ U_nonzero
+        else:
+            UTU = U_all.T @ U_all
         rho0 = torch.linalg.eigvalsh(UTU)
         d = sum(rho0 > rho_min)
         if verbose:
@@ -387,24 +410,28 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
     if init == 'random':
         W0 = [torch.randn((p_m, d)).double() for p_m in p]
     elif init == 'avgnorm':
-        W0, _ = _init_norm_W(Sigma_hat, psum, d, M)
+        W0, _ = _initializers.init_norm_W(Sigma_hat, psum, d, M)
     elif init == 'avgvar':
-        W0, _  = _init_var_W(Y_pcs, psum, d, informative)
+        W0, _  = _initializers.init_var_W(Y_pcs, psum, d, informative)
 
-    # TODO(brielin): Edge case of some mp_dim < d
+    # TODO(brielin): Edge case of some k < d
     if k == 'infer':
-        k = [pca_m.mp_dim - d for pca_m in Y_pcs]
+        k = [max(pca_m.k - d, 0) for pca_m in Y_pcs]
 
     if init == 'random':
-        L0 = None if k is None else [
-            torch.randn((p_m, k_m)).double() for k_m, p_m in zip(k, p)]
+        if k is None or all(k_m == 0 for k_m in k):
+            L0 = None
+        else:
+            L0 = [torch.randn((p_m, k_m)).double() for k_m, p_m in zip(k, p)]
         Phi0 = [torch.eye(p_m) for p_m in p]
     else:
-        L0, Phi0 = _init_L_Phi(Sigma_hat, W0, psum, p, k)
+        L0, Phi0 = _initializers.init_L_Phi(Sigma_hat, W0, psum, p, k)
 
     if verbose: print('Fitting the model.')
     W, L, Phi, l, cd = _em.fit_EM_iter(
-        Y_all, Sigma_hat, W0, L0, Phi0, maxit, device, rcond, delta, verbose)
+        Y_all, Sigma_hat, W0, L0, Phi0, maxit, device, rcond, delta, verbose,
+        impute_option, ll_exact
+    )
     rho = _em.calculate_rho(W, L, Phi, Y_all, device, rcond, 'genvar')
     rho, order = torch.sort(rho, descending=True)
 
@@ -419,13 +446,18 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
     Z_names = ['Z' + str(i+1) for i in range(d)]
     if ds_names is not None:
         X_names = [['X' + str(i+1) + '_' + name for i in range(k_m)]
-                   for name, k_m in zip(ds_names, k)]
+                for name, k_m in zip(ds_names, k)]
     else:
         X_names = [['X' + str(i+1) + '_' + str(m+1) for i in range(k_m)]
-                   for m, k_m in enumerate(k)]
-    Z = pd.DataFrame(Z.numpy(), index=common_samples, columns=Z_names)
-    X = [pd.DataFrame(X_m.numpy(), index=common_samples, columns=names)
+                for m, k_m in enumerate(k)]
+    Z = pd.DataFrame(Z.numpy(), index=use_samples, columns=Z_names)
+    if X is not None:
+        X = [pd.DataFrame(X_m.numpy(), index=use_samples, columns=names)
          for X_m, names in zip(X, X_names)]
+    else:
+        X = [pd.DataFrame(np.zeros((len(use_samples), len(names))),
+                          index=use_samples, columns=names)
+             for names in X_names]
     W = [pd.DataFrame(W_m.numpy(), index=names, columns=Z_names)
          for W_m, names in zip(W, feature_names)]
     rho = pd.Series(rho, index=Z_names)
@@ -448,6 +480,12 @@ def fit(Y: Iterable[pd.DataFrame], n_pcs: Union[str, List[int]] = 'infer',
             var_exp_X = [l/L_m.shape[0] for l, L_m in zip(lam, L)]
         else:
             var_exp_X = [l/sum(Y_m.var(0)) for l, Y_m in zip(lam, Y)]
+    else:
+        L = [pd.DataFrame(np.zeros((len(ind_names), len(col_names))),
+                          index=ind_names, columns=col_names)
+             for ind_names, col_names in zip(feature_names, X_names)]
+        lam = [0 for L_m in L]
+        var_exp_X = [0 for L_m in L]
 
     if ds_names is not None:
         X = dict(zip(ds_names, X))
